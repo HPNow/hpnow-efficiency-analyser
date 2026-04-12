@@ -359,6 +359,10 @@ def _fix_time_hours(df):
         should_convert = suspicious & (as_hours <= MAX_PLAUSIBLE_HOURS)
         hours = hours.where(~should_convert, as_hours)
 
+    # Hard clamp: any value still above the plausible limit after all
+    # corrections is physically impossible — drop it rather than show it.
+    hours = hours.where(hours <= MAX_PLAUSIBLE_HOURS)
+
     df["Time (hours)"] = hours
     return df
 
