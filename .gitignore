@@ -1,0 +1,44 @@
+# ── Credentials & secrets (NEVER commit these) ────────────────────────────────
+service_account.json
+credentials.json
+.app_config.json
+token.json
+
+# ── Streamlit local secrets (use .streamlit/secrets.toml.example as template) ─
+.streamlit/secrets.toml
+
+# ── Large binaries ─────────────────────────────────────────────────────────────
+*.exe
+*.dll
+
+# ── Output / generated files ───────────────────────────────────────────────────
+output/
+*.log
+*.png
+*.html
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Editor & OS ───────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ── Claude Code internal ───────────────────────────────────────────────────────
+.claude/
