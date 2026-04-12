@@ -114,6 +114,12 @@ def compute_run_stats(df: pd.DataFrame) -> pd.DataFrame:
             return str(v).strip() if v and str(v).strip() else default
 
         # Shared metadata fields
+        _date_start_raw = _safe("_meta_date_start", default="")
+        try:
+            _year = int(pd.to_datetime(_date_start_raw, dayfirst=True).year)
+        except Exception:
+            _year = None
+
         base = {
             "run_id":          run_id,
             "station":         _safe("_meta_tab_name"),
@@ -123,6 +129,7 @@ def compute_run_stats(df: pd.DataFrame) -> pd.DataFrame:
             "gdl":             _safe("_meta_gdl"),
             "current_mA_cm2":  _safe("_meta_current_mA_cm2"),
             "date_start":      _safe("_meta_date_start"),
+            "year":            _year,
             "aim":             _safe("_meta_aim"),
             "informal":        bool(meta.get("_meta_informal", False)),
         }
@@ -207,6 +214,7 @@ def apply_filters(
     run_stats: pd.DataFrame,
     stations: list,
     projects: list,
+    years: list,
     min_hours: float,
     exclude_informal: bool,
     exclude_short: bool,
@@ -217,6 +225,8 @@ def apply_filters(
         mask &= run_stats["station"].isin(stations)
     if projects:
         mask &= run_stats["project"].isin(projects)
+    if years:
+        mask &= run_stats["year"].isin(years)
     # NaN duration (no_data runs) → treat as 0h so they obey the min_hours filter
     mask &= run_stats["duration_h"].fillna(0) >= min_hours
     if exclude_informal:
@@ -571,101 +581,144 @@ def chat_to_markdown(history: list) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
+    # ── CSS ───────────────────────────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    /* Metric cards */
+    [data-testid="stMetric"] {
+        background: #f4f6f9;
+        border: 1px solid #dde3ec;
+        border-radius: 10px;
+        padding: 14px 18px;
+    }
+    [data-testid="stMetricLabel"] { font-size: 0.78rem; color: #5a6a7a; }
+    [data-testid="stMetricValue"] { font-size: 1.5rem; font-weight: 700; color: #1a2e45; }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] { gap: 4px; }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 6px 6px 0 0;
+        padding: 8px 18px;
+        font-weight: 500;
+        color: #5a6a7a;
+    }
+    .stTabs [aria-selected="true"] {
+        background: #fff !important;
+        border-bottom: 2px solid #1a6ebd !important;
+        color: #1a6ebd !important;
+    }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] { background: #f8f9fb; }
+
+    /* Buttons */
+    .stButton > button      { border-radius: 6px; font-weight: 500; }
+    .stDownloadButton > button { border-radius: 6px; font-weight: 500; }
+
+    /* Headings */
+    h1 { color: #1a2e45; letter-spacing: -0.5px; }
+    h2, h3 { color: #1a2e45; }
+
+    /* Hide Streamlit chrome */
+    #MainMenu { visibility: hidden; }
+    footer    { visibility: hidden; }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.title("⚡ HPNow — Faradaic Efficiency Degradation Analyser")
     st.caption("**Primary question:** what conditions cause Faradaic efficiency to decline over time?")
+
+    # ── Data (cached) — loaded before sidebar so year options are available ───
+    df        = load_data()
+    run_stats = compute_run_stats(df)
 
     # ── Session state (load persisted config on first run) ────────────────────
     if "initialised" not in st.session_state:
         cfg = load_config()
-        st.session_state.chat_history    = []
-        # Priority: persisted config → Streamlit secrets → env var
+        st.session_state.chat_history      = []
+        st.session_state.models            = cfg.get("models") or DEFAULT_MODELS
+        st.session_state.discovered_models = cfg.get("discovered_models") or []
+        # Priority: Streamlit secrets → persisted config → env var
         _secrets_key = ""
         try:
             _secrets_key = st.secrets.get("GOOGLE_API_KEY", "")
         except Exception:
             pass
         st.session_state.api_key = (
-            cfg.get("api_key")
-            or _secrets_key
+            _secrets_key
+            or cfg.get("api_key")
             or os.environ.get("GOOGLE_API_KEY", "")
         )
-        st.session_state.models          = cfg.get("models") or DEFAULT_MODELS
-        st.session_state.discovered_models = cfg.get("discovered_models") or []
-        st.session_state.initialised     = True
+        st.session_state.initialised = True
+
+    # Detect whether the API key is pre-configured via Streamlit secrets
+    _key_from_secrets = False
+    try:
+        _key_from_secrets = bool(st.secrets.get("GOOGLE_API_KEY", ""))
+    except Exception:
+        pass
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
-        st.header("⚙️ Settings")
+        # ── AI settings (only show key input when not pre-configured) ─────────
+        if not _key_from_secrets:
+            st.header("⚙️ Settings")
+            api_key = st.text_input(
+                "Google AI Studio API key",
+                value=st.session_state.api_key,
+                type="password",
+                placeholder="Paste key, then press Enter",
+                help="Free at aistudio.google.com → Get API key.",
+            )
+            if st.button("✅ Apply key", use_container_width=True):
+                st.session_state.api_key = api_key
+                save_config({"api_key": api_key})
+                st.rerun()
+            elif api_key != st.session_state.api_key:
+                st.session_state.api_key = api_key
 
-        api_key = st.text_input(
-            "Google AI Studio API key",
-            value=st.session_state.api_key,
-            type="password",
-            placeholder="Paste key, then press Enter",
-            help="Free at aistudio.google.com → Get API key.",
-        )
-        if st.button("✅ Apply key", use_container_width=True):
-            st.session_state.api_key = api_key
-            save_config({"api_key": api_key})
-            st.rerun()
-        elif api_key != st.session_state.api_key:
-            st.session_state.api_key = api_key
+            if st.session_state.api_key:
+                st.success("API key saved", icon="🔑")
 
-        if st.session_state.api_key:
-            st.success("API key saved", icon="🔑")
+                # Model discovery
+                if st.button("🔍 Discover available models", use_container_width=True):
+                    with st.spinner("Fetching models from Google AI…"):
+                        try:
+                            client = genai.Client(api_key=st.session_state.api_key)
+                            found = []
+                            for m in client.models.list():
+                                name    = m.name.replace("models/", "")
+                                display = getattr(m, "display_name", name)
+                                if ("flash" in name.lower() or "lite" in name.lower()) and \
+                                   "embed" not in name.lower() and "vision" not in name.lower():
+                                    found.append((name, display))
+                            st.session_state.discovered_models = found
+                            save_config({"discovered_models": found})
+                        except Exception as e:
+                            st.error(f"Could not list models: {e}")
 
-            # ── Model discovery ───────────────────────────────────────────────
-            if st.button("🔍 Discover available models", use_container_width=True):
-                with st.spinner("Fetching models from Google AI…"):
-                    try:
-                        client = genai.Client(api_key=st.session_state.api_key)
-                        found = []
-                        for m in client.models.list():
-                            name    = m.name.replace("models/", "")
-                            display = getattr(m, "display_name", name)
-                            if ("flash" in name.lower() or "lite" in name.lower()) and \
-                               "embed" not in name.lower() and "vision" not in name.lower():
-                                found.append((name, display))
-                        st.session_state.discovered_models = found
-                        save_config({"discovered_models": found})
-                    except Exception as e:
-                        st.error(f"Could not list models: {e}")
+                if st.session_state.discovered_models:
+                    label_map = {n: d for n, d in st.session_state.discovered_models}
+                    st.caption("Tick models to use, in priority order:")
+                    new_selection = []
+                    for api_name, display_name in st.session_state.discovered_models:
+                        if st.checkbox(display_name, value=api_name in st.session_state.models,
+                                       key=f"model_cb_{api_name}", help=f"API name: {api_name}"):
+                            new_selection.append(api_name)
+                    if new_selection != st.session_state.models:
+                        st.session_state.models = new_selection
+                        save_config({"models": new_selection})
 
-            if st.session_state.discovered_models:
-                st.markdown("**Select fallback order** (first = tried first):")
+                if st.session_state.models:
+                    label_map = {n: d for n, d in st.session_state.discovered_models} \
+                                if st.session_state.discovered_models else {}
+                    st.caption("**Active:** " + " → ".join(
+                        label_map.get(m, m) for m in st.session_state.models
+                    ))
+                else:
+                    st.caption("No models selected — using defaults")
 
-                options     = [name for name, _ in st.session_state.discovered_models]
-                # Map api_name → "Display Name" for readable labels
-                label_map   = {name: disp
-                               for name, disp in st.session_state.discovered_models}
-
-                # Show each model on its own line with full name visible
-                st.caption("Tick the models you want to use, in priority order:")
-                new_selection = []
-                for api_name, display_name in st.session_state.discovered_models:
-                    already_selected = api_name in st.session_state.models
-                    checked = st.checkbox(
-                        f"{display_name}",
-                        value=already_selected,
-                        key=f"model_cb_{api_name}",
-                        help=f"API name: {api_name}",
-                    )
-                    if checked:
-                        new_selection.append(api_name)
-
-                if new_selection != st.session_state.models:
-                    st.session_state.models = new_selection
-                    save_config({"models": new_selection})
-
-            if st.session_state.models:
-                st.caption("**Active order:** " + " → ".join(
-                    label_map.get(m, m) if st.session_state.discovered_models else m
-                    for m in st.session_state.models
-                ))
-            else:
-                st.caption("No models selected — using defaults")
-
-        st.divider()
+            st.divider()
 
         if st.button("🔄 Refresh data from Sheets", use_container_width=True):
             st.cache_data.clear()
@@ -673,13 +726,16 @@ def main():
 
         st.subheader("Filters")
 
-        df = load_data()
         all_stations = sorted(df["_meta_tab_name"].dropna().unique())
         all_projects = sorted({
             str(p).strip()
             for p in df["_meta_project"].dropna()
             if str(p).strip() and str(p).strip() not in ("—", "nan")
         })
+        all_years = sorted(
+            [y for y in run_stats["year"].dropna().unique() if y],
+            reverse=True,
+        )
 
         stations = st.multiselect(
             "Test stations", options=all_stations, default=[],
@@ -688,6 +744,10 @@ def main():
         projects = st.multiselect(
             "Projects", options=all_projects, default=[],
             placeholder="All projects",
+        )
+        years = st.multiselect(
+            "Year", options=all_years, default=[],
+            placeholder="All years",
         )
         min_hours = st.slider(
             "Min. run duration (hours)", min_value=0, max_value=500, value=20, step=5,
@@ -701,10 +761,9 @@ def main():
             f"{df['_meta_tab_name'].nunique()} test stations"
         )
 
-    # ── Compute & filter ──────────────────────────────────────────────────────
-    run_stats = compute_run_stats(df)
+    # ── Apply filters ─────────────────────────────────────────────────────────
     filtered_df, filtered_stats = apply_filters(
-        df, run_stats, stations, projects, min_hours, exclude_informal, exclude_short,
+        df, run_stats, stations, projects, years, min_hours, exclude_informal, exclude_short,
     )
 
     if filtered_stats.empty:
@@ -714,6 +773,7 @@ def main():
     filter_summary = (
         f"stations={'all' if not stations else ', '.join(stations)}, "
         f"projects={'all' if not projects else ', '.join(projects)}, "
+        f"years={'all' if not years else ', '.join(str(y) for y in years)}, "
         f"min_duration={min_hours}h, "
         f"exclude_informal={exclude_informal}"
     )
