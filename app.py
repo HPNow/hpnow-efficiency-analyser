@@ -21,6 +21,21 @@ from google.genai import types as genai_types
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+plt.rcParams.update({
+    "figure.facecolor":  "white",
+    "axes.facecolor":    "white",
+    "axes.edgecolor":    "#dde3ec",
+    "axes.linewidth":    0.8,
+    "axes.spines.top":   False,
+    "axes.spines.right": False,
+    "grid.color":        "#eaeef2",
+    "grid.linewidth":    0.7,
+    "font.size":         10.5,
+    "axes.titlesize":    12,
+    "axes.labelsize":    11,
+    "xtick.labelsize":   10,
+    "ytick.labelsize":   10,
+})
 import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
@@ -577,6 +592,52 @@ def chat_to_markdown(history: list) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  TABLE STYLING
+# ══════════════════════════════════════════════════════════════════════════════
+
+_LABEL_BG = {
+    "degrading":    "#fde8e8",
+    "stable":       "#e8f8ef",
+    "improving":    "#d4f0e0",
+    "short":        "#f2f2f2",
+    "inconclusive": "#f2f2f2",
+    "no_data":      "#f2f2f2",
+}
+_LABEL_FG = {
+    "degrading":    "#c0392b",
+    "stable":       "#1e8449",
+    "improving":    "#145a32",
+    "short":        "#7f8c8d",
+    "inconclusive": "#7f8c8d",
+    "no_data":      "#7f8c8d",
+}
+
+def _style_run_table(df: pd.DataFrame):
+    def _label(val):
+        bg = _LABEL_BG.get(str(val), "#f2f2f2")
+        fg = _LABEL_FG.get(str(val), "#333")
+        return f"background-color: {bg}; color: {fg}; font-weight: 600;"
+
+    def _deg_rate(val):
+        try:
+            v = float(val)
+            if v > 0.1:
+                return "color: #c0392b; font-weight: 600;"
+            elif v < -0.05:
+                return "color: #1e8449; font-weight: 600;"
+        except Exception:
+            pass
+        return ""
+
+    styler = df.style
+    if "label" in df.columns:
+        styler = styler.map(_label, subset=["label"])
+    if "deg_rate_%/100h" in df.columns:
+        styler = styler.map(_deg_rate, subset=["deg_rate_%/100h"])
+    return styler
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  MAIN APP
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -733,7 +794,7 @@ def main():
             if str(p).strip() and str(p).strip() not in ("—", "nan")
         })
         all_years = sorted(
-            [y for y in run_stats["year"].dropna().unique() if y],
+            [int(y) for y in run_stats["year"].dropna().unique() if y],
             reverse=True,
         )
 
@@ -801,11 +862,13 @@ def main():
     st.divider()
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
+    _n_runs     = len(filtered_stats)
+    _n_stations = filtered_stats["station"].nunique()
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📉 Degradation Overview",
+        f"📉 Degradation Overview  ({_n_runs} runs)",
         "📈 Efficiency Trajectories",
         "🔍 Correlations",
-        "🏭 Station Comparison",
+        f"🏭 Station Comparison  ({_n_stations} stations)",
         "💬 Ask AI",
     ])
 
@@ -835,7 +898,7 @@ def main():
                 .sort_values("deg_rate_%/100h", ascending=False)
             )
             st.dataframe(
-                table_df,
+                _style_run_table(table_df),
                 hide_index=True,
                 use_container_width=True,
                 height=520,
