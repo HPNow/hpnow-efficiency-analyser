@@ -93,6 +93,15 @@ MIN_POINTS_FOR_REGRESSION = 4
 DEGRADING_SLOPE  = -0.03   # worse than –3%/100h → degrading
 IMPROVING_SLOPE  =  0.01   # better  than +1%/100h → improving
 
+# Columns that are mathematically derived from Efficiency (%) and must be
+# excluded from correlation analysis to avoid circular/spurious results.
+# "H2O2 current (A)" = Efficiency(%) / 100 × Current(A), so it is not
+# an independent variable.
+EXCLUDE_FROM_CORR = frozenset({
+    "H2O2 current (A)",
+    "H2O2 current (mA)",
+})
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="HPNow | Efficiency Analyser",
@@ -316,7 +325,7 @@ def build_chat_context(
         meta_cols = {c for c in filtered_df.columns if c.startswith("_")}
         eff = pd.to_numeric(filtered_df["Efficiency (%)"], errors="coerce")
         for col in filtered_df.columns:
-            if col in meta_cols or col == "Efficiency (%)":
+            if col in meta_cols or col == "Efficiency (%)" or col in EXCLUDE_FROM_CORR:
                 continue
             if not pd.api.types.is_numeric_dtype(filtered_df[col]):
                 continue
@@ -442,7 +451,7 @@ def fig_corr_bars(filtered_df: pd.DataFrame) -> plt.Figure:
 
     corrs = {}
     for col in filtered_df.columns:
-        if col in meta_cols or col == "Efficiency (%)":
+        if col in meta_cols or col == "Efficiency (%)" or col in EXCLUDE_FROM_CORR:
             continue
         if not pd.api.types.is_numeric_dtype(filtered_df[col]):
             continue
