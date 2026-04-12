@@ -811,15 +811,9 @@ def main():
             "Projects", options=all_projects,
             placeholder="All projects", key="filter_projects",
         )
-        _yr_label, _yr_btn = st.columns([3, 1])
-        _yr_label.markdown("**Year**")
-        if _yr_btn.button("This year", help="Filter to current year only"):
-            _cy = datetime.now().year
-            st.session_state["filter_years"] = [_cy] if _cy in all_years else []
-            st.rerun()
         years = st.multiselect(
-            "", options=all_years,
-            placeholder="All years", key="filter_years", label_visibility="collapsed",
+            "Year", options=all_years,
+            placeholder="All years", key="filter_years",
         )
         min_hours = st.slider(
             "Min. run duration (hours)", min_value=0, max_value=500, value=20, step=5,
@@ -1328,21 +1322,6 @@ def main():
                         raise
 
             active_models = st.session_state.models or DEFAULT_MODELS
-
-            # ── Starter questions (shown only when chat is empty) ─────────────
-            if not st.session_state.chat_history:
-                st.markdown("**Suggested questions:**")
-                starters = [
-                    "What conditions are most associated with faster degradation?",
-                    "Which test stations have the worst degradation rates?",
-                    "How does GDL type affect efficiency degradation?",
-                    "Summarise the overall dataset and key findings.",
-                ]
-                for q in starters:
-                    if st.button(q, key=f"starter_{q[:30]}", use_container_width=True):
-                        st.session_state.chat_history.append({"role": "user", "content": q})
-                        st.rerun()
-                st.divider()
 
             # ── Display history ───────────────────────────────────────────────
             for msg in st.session_state.chat_history:
