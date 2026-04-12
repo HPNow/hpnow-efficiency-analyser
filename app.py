@@ -100,6 +100,9 @@ IMPROVING_SLOPE  =  0.01   # better  than +1%/100h → improving
 EXCLUDE_FROM_CORR = frozenset({
     "H2O2 current (A)",
     "H2O2 current (mA)",
+    "H2O2 current density (mA/cm2)",
+    "Throughput (g/h)",
+    "Avg. throughput (g/h)",
 })
 
 # ── Page config ───────────────────────────────────────────────────────────────
