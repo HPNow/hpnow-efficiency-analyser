@@ -333,15 +333,32 @@ def _parse_tab_legacy(worksheet, raw):
 
 
 def _fix_time_hours(df):
-    """Derive Time (hours) from Time (seconds) where hours looks wrong."""
+    """Derive Time (hours) from Time (seconds) where hours looks wrong.
+
+    MAX_PLAUSIBLE_HOURS is the longest run ever recorded at HPNow.
+    Any value above this is treated as suspicious (likely stored in seconds).
+    """
+    MAX_PLAUSIBLE_HOURS = 12_000
+
     if "Time (hours)" not in df.columns:
         return df
     hours = pd.to_numeric(df["Time (hours)"], errors="coerce")
+
     if "Time (seconds)" in df.columns:
+        # Preferred: derive from the dedicated seconds column
         seconds = pd.to_numeric(df["Time (seconds)"], errors="coerce")
         derived = seconds / 3600.0
-        bad = hours.isna() | (hours < 0) | (hours > 50_000)
+        bad = hours.isna() | (hours < 0) | (hours > MAX_PLAUSIBLE_HOURS)
         hours = hours.where(~bad, derived)
+    else:
+        # Fallback: if value exceeds plausible range but dividing by 3600
+        # gives a plausible result, the column was almost certainly recorded
+        # in seconds rather than hours.
+        suspicious = hours > MAX_PLAUSIBLE_HOURS
+        as_hours = hours / 3600.0
+        should_convert = suspicious & (as_hours <= MAX_PLAUSIBLE_HOURS)
+        hours = hours.where(~should_convert, as_hours)
+
     df["Time (hours)"] = hours
     return df
 
