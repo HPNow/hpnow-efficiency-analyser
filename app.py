@@ -710,7 +710,8 @@ def main():
             or cfg.get("api_key")
             or os.environ.get("GOOGLE_API_KEY", "")
         )
-        st.session_state.initialised = True
+        st.session_state.last_loaded_at = datetime.now()
+        st.session_state.initialised    = True
 
     # Detect whether the API key is pre-configured via Streamlit secrets
     _key_from_secrets = False
@@ -783,7 +784,11 @@ def main():
 
         if st.button("🔄 Refresh data from Sheets", use_container_width=True):
             st.cache_data.clear()
+            st.session_state.last_loaded_at = datetime.now()
             st.rerun()
+        _elapsed = int((datetime.now() - st.session_state.last_loaded_at).total_seconds() / 60)
+        _freshness = "just now" if _elapsed < 1 else f"{_elapsed} min ago"
+        st.caption(f"Data loaded {_freshness}")
 
         st.subheader("Filters")
 
@@ -799,22 +804,33 @@ def main():
         )
 
         stations = st.multiselect(
-            "Test stations", options=all_stations, default=[],
-            placeholder="All stations",
+            "Test stations", options=all_stations,
+            placeholder="All stations", key="filter_stations",
         )
         projects = st.multiselect(
-            "Projects", options=all_projects, default=[],
-            placeholder="All projects",
+            "Projects", options=all_projects,
+            placeholder="All projects", key="filter_projects",
         )
+        _yr_label, _yr_btn = st.columns([3, 1])
+        _yr_label.markdown("**Year**")
+        if _yr_btn.button("This year", help="Filter to current year only"):
+            _cy = datetime.now().year
+            st.session_state["filter_years"] = [_cy] if _cy in all_years else []
+            st.rerun()
         years = st.multiselect(
-            "Year", options=all_years, default=[],
-            placeholder="All years",
+            "", options=all_years,
+            placeholder="All years", key="filter_years", label_visibility="collapsed",
         )
         min_hours = st.slider(
             "Min. run duration (hours)", min_value=0, max_value=500, value=20, step=5,
         )
         exclude_informal = st.toggle("Exclude informal runs (no stack ID)", value=False)
         exclude_short    = st.toggle("Exclude short runs (<20 h)", value=True)
+
+        if st.button("↺ Reset filters", use_container_width=True, type="secondary"):
+            for _k in ("filter_stations", "filter_projects", "filter_years"):
+                st.session_state[_k] = []
+            st.rerun()
 
         st.divider()
         st.caption(
@@ -1274,8 +1290,6 @@ def main():
                             if not fn_calls:
                                 # Final answer — stream word by word for UX
                                 final_text = "\n".join(text_parts)
-                                yield f"*[{model_name}]*\n\n"
-                                # Simulate streaming by yielding chunks
                                 for word in final_text.split(" "):
                                     yield word + " "
                                 return
@@ -1313,9 +1327,22 @@ def main():
                             continue
                         raise
 
-            # ── Active model indicator ────────────────────────────────────────
             active_models = st.session_state.models or DEFAULT_MODELS
-            st.caption(f"Fallback order: {' → '.join(active_models)}")
+
+            # ── Starter questions (shown only when chat is empty) ─────────────
+            if not st.session_state.chat_history:
+                st.markdown("**Suggested questions:**")
+                starters = [
+                    "What conditions are most associated with faster degradation?",
+                    "Which test stations have the worst degradation rates?",
+                    "How does GDL type affect efficiency degradation?",
+                    "Summarise the overall dataset and key findings.",
+                ]
+                for q in starters:
+                    if st.button(q, key=f"starter_{q[:30]}", use_container_width=True):
+                        st.session_state.chat_history.append({"role": "user", "content": q})
+                        st.rerun()
+                st.divider()
 
             # ── Display history ───────────────────────────────────────────────
             for msg in st.session_state.chat_history:
