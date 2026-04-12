@@ -22,14 +22,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 plt.rcParams.update({
-    "figure.facecolor":  "white",
-    "axes.facecolor":    "white",
-    "axes.edgecolor":    "#dde3ec",
+    "figure.facecolor":  "#0f1623",
+    "axes.facecolor":    "#080c18",
+    "axes.edgecolor":    "#1e3a5f",
+    "axes.labelcolor":   "#94a3b8",
     "axes.linewidth":    0.8,
     "axes.spines.top":   False,
     "axes.spines.right": False,
-    "grid.color":        "#eaeef2",
-    "grid.linewidth":    0.7,
+    "text.color":        "#e2e8f0",
+    "xtick.color":       "#64748b",
+    "ytick.color":       "#64748b",
+    "grid.color":        "#1e3a5f",
+    "grid.linewidth":    0.6,
     "font.size":         10.5,
     "axes.titlesize":    12,
     "axes.labelsize":    11,
@@ -77,13 +81,13 @@ def save_config(data: dict):
 
 
 COLORS = {
-    "degrading":    "#e74c3c",
-    "stable":       "#2ecc71",
-    "improving":    "#27ae60",
-    "short":        "#bdc3c7",
-    "inconclusive": "#95a5a6",
-    "no_data":      "#d5d8dc",
-    "neutral":      "#3498db",
+    "degrading":    "#ff4d6d",
+    "stable":       "#00c896",
+    "improving":    "#00ffcc",
+    "short":        "#4a5568",
+    "inconclusive": "#64748b",
+    "no_data":      "#334155",
+    "neutral":      "#0096ff",
 }
 
 # Minimum number of data points to attempt regression
@@ -427,10 +431,12 @@ def fig_trajectories(
             label = label_series.get(run_id, "inconclusive")
             color = COLORS.get(label, "#bdc3c7")
 
-        ax.plot(
-            run_df["Time (hours)"], run_df["Efficiency (%)"],
-            linewidth=1.3, alpha=0.75, color=color,
-        )
+        t_vals   = run_df["Time (hours)"]
+        eff_vals = run_df["Efficiency (%)"]
+        # Glow effect: wide soft halo + sharp core line
+        ax.plot(t_vals, eff_vals, linewidth=5,   alpha=0.07, color=color)
+        ax.plot(t_vals, eff_vals, linewidth=2.5, alpha=0.20, color=color)
+        ax.plot(t_vals, eff_vals, linewidth=1.2, alpha=0.90, color=color)
         plotted += 1
 
     ax.set_xlabel("Time (hours)", fontsize=11)
@@ -608,20 +614,20 @@ def chat_to_markdown(history: list) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _LABEL_BG = {
-    "degrading":    "#fde8e8",
-    "stable":       "#e8f8ef",
-    "improving":    "#d4f0e0",
-    "short":        "#f2f2f2",
-    "inconclusive": "#f2f2f2",
-    "no_data":      "#f2f2f2",
+    "degrading":    "#3d0a14",
+    "stable":       "#083d25",
+    "improving":    "#063d2e",
+    "short":        "#1a2030",
+    "inconclusive": "#1a2030",
+    "no_data":      "#1a2030",
 }
 _LABEL_FG = {
-    "degrading":    "#c0392b",
-    "stable":       "#1e8449",
-    "improving":    "#145a32",
-    "short":        "#7f8c8d",
-    "inconclusive": "#7f8c8d",
-    "no_data":      "#7f8c8d",
+    "degrading":    "#ff4d6d",
+    "stable":       "#00c896",
+    "improving":    "#00ffcc",
+    "short":        "#64748b",
+    "inconclusive": "#64748b",
+    "no_data":      "#64748b",
 }
 
 def _style_run_table(df: pd.DataFrame):
@@ -634,9 +640,9 @@ def _style_run_table(df: pd.DataFrame):
         try:
             v = float(val)
             if v > 0.1:
-                return "color: #c0392b; font-weight: 600;"
+                return "color: #ff4d6d; font-weight: 600;"
             elif v < -0.05:
-                return "color: #1e8449; font-weight: 600;"
+                return "color: #00c896; font-weight: 600;"
         except Exception:
             pass
         return ""
@@ -657,42 +663,101 @@ def main():
     # ── CSS ───────────────────────────────────────────────────────────────────
     st.markdown("""
     <style>
-    /* Metric cards */
-    [data-testid="stMetric"] {
-        background: #f4f6f9;
-        border: 1px solid #dde3ec;
-        border-radius: 10px;
-        padding: 14px 18px;
-    }
-    [data-testid="stMetricLabel"] { font-size: 0.78rem; color: #5a6a7a; }
-    [data-testid="stMetricValue"] { font-size: 1.5rem; font-weight: 700; color: #1a2e45; }
+    @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&display=swap');
 
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] { gap: 4px; }
+    html, body, [class*="css"] { font-family: 'Barlow', sans-serif; }
+
+    /* ── Metric cards ───────────────────────────────────────────────────── */
+    [data-testid="stMetric"] {
+        background: #0f1623;
+        border: 1px solid #1e3a5f;
+        border-left: 3px solid #0096ff;
+        border-radius: 4px;
+        padding: 14px 18px;
+        box-shadow: 0 0 16px rgba(0, 150, 255, 0.08);
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #64748b;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: #e2e8f0;
+        font-family: 'Barlow Condensed', sans-serif;
+    }
+    [data-testid="stMetricDelta"] { font-size: 0.8rem; }
+
+    /* ── Tabs ───────────────────────────────────────────────────────────── */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2px;
+        border-bottom: 1px solid #1e3a5f;
+    }
     .stTabs [data-baseweb="tab"] {
-        border-radius: 6px 6px 0 0;
-        padding: 8px 18px;
-        font-weight: 500;
-        color: #5a6a7a;
+        border-radius: 3px 3px 0 0;
+        padding: 8px 16px;
+        font-weight: 600;
+        font-size: 0.72rem;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: #64748b;
     }
     .stTabs [aria-selected="true"] {
-        background: #fff !important;
-        border-bottom: 2px solid #1a6ebd !important;
-        color: #1a6ebd !important;
+        background: transparent !important;
+        border-bottom: 2px solid #0096ff !important;
+        color: #0096ff !important;
     }
 
-    /* Sidebar */
-    [data-testid="stSidebar"] { background: #f8f9fb; }
+    /* ── Sidebar ────────────────────────────────────────────────────────── */
+    [data-testid="stSidebar"] {
+        background: #080c18;
+        border-right: 1px solid #1e3a5f;
+    }
 
-    /* Buttons */
-    .stButton > button      { border-radius: 6px; font-weight: 500; }
-    .stDownloadButton > button { border-radius: 6px; font-weight: 500; }
+    /* ── Buttons ────────────────────────────────────────────────────────── */
+    .stButton > button {
+        border-radius: 3px;
+        font-weight: 600;
+        font-size: 0.72rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        border: 1px solid #1e3a5f;
+        transition: all 0.15s;
+    }
+    .stButton > button:hover {
+        border-color: #0096ff;
+        color: #0096ff;
+        box-shadow: 0 0 8px rgba(0, 150, 255, 0.2);
+    }
+    .stDownloadButton > button {
+        border-radius: 3px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
 
-    /* Headings */
-    h1 { color: #1a2e45; letter-spacing: -0.5px; }
-    h2, h3 { color: #1a2e45; }
+    /* ── Headings ───────────────────────────────────────────────────────── */
+    h1 {
+        font-family: 'Barlow Condensed', sans-serif;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        color: #e2e8f0;
+    }
+    h2, h3 {
+        font-family: 'Barlow Condensed', sans-serif;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        color: #cbd5e1;
+    }
 
-    /* Hide Streamlit chrome */
+    /* ── Dividers ───────────────────────────────────────────────────────── */
+    hr { border-color: #1e3a5f; }
+
+    /* ── Hide Streamlit chrome ──────────────────────────────────────────── */
     #MainMenu { visibility: hidden; }
     footer    { visibility: hidden; }
     </style>
