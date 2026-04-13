@@ -1292,7 +1292,10 @@ def main():
             # ── Helper checks ─────────────────────────────────────────────────
             def _is_rate_limit(exc):
                 err = str(exc)
-                return any(k in err for k in ("429","RESOURCE_EXHAUSTED","quota","Quota"))
+                return any(k in err for k in (
+                    "429", "RESOURCE_EXHAUSTED", "quota", "Quota",
+                    "503", "UNAVAILABLE", "high demand", "overloaded",
+                ))
 
             def _is_bad_key(exc):
                 err = str(exc)
