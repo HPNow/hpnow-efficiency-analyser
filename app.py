@@ -59,6 +59,8 @@ DEFAULT_MODELS = [
     "gemini-2.5-flash",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
 ]
 
 CONFIG_FILE = Path(__file__).parent / ".app_config.json"
@@ -1397,8 +1399,7 @@ def main():
                         if _is_bad_key(exc):
                             raise
                         if (_is_rate_limit(exc) or _is_model_missing(exc)) and not is_last_model:
-                            yield f"*[{model_name} limited — trying {models[model_idx+1]}…]*\n\n"
-                            continue
+                            continue  # silently try next model
                         raise
 
             active_models = st.session_state.models or DEFAULT_MODELS
