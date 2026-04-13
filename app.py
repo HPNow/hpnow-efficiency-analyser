@@ -625,8 +625,8 @@ def fig_feature_vs_degradation(filtered_stats: pd.DataFrame, feature: str) -> pl
     )
     ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
     ax.set_xlabel(feature, fontsize=11)
-    ax.set_ylabel("Degradation rate (%/100h)", fontsize=11)
-    ax.set_title(f"Degradation rate by {feature}", fontsize=12)
+    ax.set_ylabel("Degradation rate (%/100h)\npositive = faster degradation", fontsize=10)
+    ax.set_title(f"Degradation rate by {feature}\n(red = fast degradation  ·  green = stable / improving)", fontsize=11)
     ax.tick_params(axis="x", rotation=35)
     ax.grid(axis="y", alpha=0.25)
 
@@ -654,12 +654,12 @@ def fig_station_boxplot(filtered_stats: pd.DataFrame) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(9, max(4, len(order) * 0.45 + 1)))
     sns.boxplot(
         data=data, y="station", x="deg_rate_%/100h",
-        order=order, ax=ax, palette="RdYlGn_r", width=0.55, orient="h",
+        order=order, ax=ax, palette="RdYlGn", width=0.55, orient="h",
     )
-    ax.axvline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.6)
-    ax.set_xlabel("Degradation rate (%/100h)", fontsize=11)
+    ax.axvline(0, color="#475569", linewidth=0.9, linestyle="--", alpha=0.7)
+    ax.set_xlabel("Degradation rate (%/100h)  —  positive = faster degradation", fontsize=11)
     ax.set_ylabel("Test station", fontsize=11)
-    ax.set_title("Degradation rate by test station", fontsize=12)
+    ax.set_title("Degradation rate by test station\n(red = fast degradation  ·  green = stable / improving)", fontsize=11)
     ax.grid(axis="x", alpha=0.25)
     fig.tight_layout()
     return fig
@@ -674,7 +674,7 @@ def fig_deg_histogram(filtered_stats: pd.DataFrame) -> plt.Figure:
                    label=f"Median: {vals.median():.2f}")
         ax.axvline(0, color="black", linewidth=1.0, linestyle="--", alpha=0.6)
         ax.legend(fontsize=9)
-    ax.set_xlabel("Degradation rate (%/100h)", fontsize=10)
+    ax.set_xlabel("Degradation rate (%/100h)\npositive = faster degradation", fontsize=10)
     ax.set_ylabel("# runs", fontsize=10)
     ax.set_title("Distribution of\ndegradation rates", fontsize=11)
     ax.grid(alpha=0.25)
@@ -1259,6 +1259,10 @@ def main():
             st.dataframe(station_agg, use_container_width=True, height=500)
 
         with st_r:
+            st.caption(
+                "Degradation rate = % Faradaic efficiency lost per 100 h of operation.  "
+                "**Positive = declining efficiency (worse).  Negative = improving.**"
+            )
             fig = fig_station_boxplot(filtered_stats)
             st.pyplot(fig)
             st.download_button(
