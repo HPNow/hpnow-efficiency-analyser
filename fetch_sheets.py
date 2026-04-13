@@ -62,23 +62,50 @@ def _get_credentials():
     )
 
 
+def _is_formal_boundary(row) -> bool:
+    """Return True if *row* is the opening row of a formal metadata block.
+
+    Two formats exist in the sheet:
+
+    Standard (new) format — col 0 is the literal text "Initials":
+        ['Initials', '', 'RARA', 'Stack ID', '', 'SG2-25-140']
+
+    Legacy (old) format — col 0 holds the operator's own ID (e.g. '33',
+    'LACH', ' ') and the "Stack ID" label lands at col 3 instead:
+        ['33', '', 'POMO', 'Stack ID', '', ...]
+        [' ',  '', 'LACH', 'Stack ID', '', ...]
+
+    Column 3 == 'Stack ID' is the reliable discriminator for both formats.
+    """
+    if not row:
+        return False
+    if row[0].strip() == "Initials":
+        return True
+    return len(row) > 3 and row[3].strip() == "Stack ID"
+
+
 def _extract_run_metadata(block_rows):
     """
     Extract metadata from a run's header block (the ~7 orange rows).
-    block_rows: list of raw row lists starting from the 'Initials' row.
+    block_rows: list of raw row lists starting from the 'Initials' row
+    (or the legacy operator-ID row in older tabs such as r0057).
     """
     meta = {}
     for row in block_rows:
-        if not row or not row[0].strip():
+        if not row:
             continue
         label = row[0].strip()
-        if label == "Initials":
+        # The "Initials" / operator-ID row — both standard and legacy format
+        if label == "Initials" or (len(row) > 3 and row[3].strip() == "Stack ID"):
             meta["operator"] = row[2].strip() if len(row) > 2 else None
             # Stack ID label is at col3, value at col5
             meta["stack_id"] = (
                 row[5].strip() if len(row) > 5 and row[5].strip() else None
             )
-        elif label == "Date start":
+            continue  # already handled — don't fall through to label checks
+        if not label:
+            continue  # skip blank rows
+        if label == "Date start":
             meta["date_start"] = row[2].strip() if len(row) > 2 else None
             meta["aim"]        = row[5].strip() if len(row) > 5 else None
         elif label in ("Cell area",):
@@ -123,7 +150,7 @@ def _collect_run_data(raw, data_start, headers, meta, tab_name, run_index):
             m += 1
             continue
         first = r[0].strip()
-        if first == "Initials":
+        if first == "Initials" or _is_formal_boundary(r):
             break
         if INFORMAL_BOUNDARY.match(first):
             break
@@ -182,8 +209,8 @@ def _parse_tab(worksheet):
             continue
         first = row[0].strip()
 
-        # ── Formal boundary: Initials block ──────────────────────────────────
-        if first == "Initials":
+        # ── Formal boundary: Initials block (standard OR legacy format) ─────
+        if _is_formal_boundary(row):
             # Collect up to 12 rows of metadata
             block = []
             j = i
@@ -208,7 +235,7 @@ def _parse_tab(worksheet):
                 r0 = raw[k][0].strip() if raw[k] else ""
                 if r0 == "Time (hours)":
                     break
-                if r0 == "Initials" or INFORMAL_BOUNDARY.match(r0):
+                if _is_formal_boundary(raw[k]) or INFORMAL_BOUNDARY.match(r0):
                     k = -1  # signal: no header before next boundary
                     break
                 k += 1
