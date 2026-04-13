@@ -102,13 +102,23 @@ IMPROVING_SLOPE  =  0.01   # better  than +1%/100h → improving
 # "H2O2 current (A)" = Efficiency(%) / 100 × Current(A), so it is not
 # an independent variable.
 EXCLUDE_FROM_CORR = frozenset({
+    # Derived from Efficiency (%) — circular
     "H2O2 current (A)",
     "H2O2 current (mA)",
     "H2O2 current density (mA/cm2)",
     "Throughput (g/h)",
     "Avg. throughput (g/h)",
+    # Voltage setpoints — control inputs, not process outcomes
+    "Set point (V)",
+    "voltage setpoint (V)",
+    # Strip-correction intermediates (exact names from sheet)
     "Correction for strip 1",
+    'Correction for strip 1 "m"',
+    'Correction for strip 1 "b"',
     "Correction for strip 2",
+    'Correction for strip 2 "b"',
+    "Corrected strip 1",
+    "Corrected strip 2",
 })
 
 
@@ -123,6 +133,12 @@ def _is_excluded_from_corr(col: str) -> bool:
     col_lower = col.lower()
     # Any "average efficiency" or "avg. efficiency" variant is circular
     if ("avg" in col_lower or "average" in col_lower) and "effic" in col_lower:
+        return True
+    # Catch any remaining strip-correction or corrected-strip variants
+    if "correction for strip" in col_lower or "corrected strip" in col_lower:
+        return True
+    # Catch any voltage setpoint variants
+    if "setpoint" in col_lower and "v" in col_lower:
         return True
     return False
 
