@@ -449,10 +449,24 @@ def _merge_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _clean_data(df):
-    """Filter physically impossible values."""
+    """Filter physically impossible values.
+
+    Efficiency lower bound: 3 %.
+    A running H2O2 electrolyser cannot produce < 3 % faradaic efficiency.
+    Values below this threshold originate from one of two artefacts seen in
+    the data:
+      (a) Two interleaved measurement streams in the same tab — one real
+          channel and one background/standby channel that consistently reads
+          ~0.8–1.23 %.
+      (b) "System off" rows logged while the stack was not running.
+    Both cases produce near-constant values well below 3 % and should not
+    contribute to trajectory plots or regression.  Setting them to NaN lets
+    the rest of the pipeline ignore them without dropping the whole row
+    (other columns such as Current or Temperature may still be valid).
+    """
     if "Efficiency (%)" in df.columns:
         eff = pd.to_numeric(df["Efficiency (%)"], errors="coerce")
-        df["Efficiency (%)"] = eff.where((eff >= 0) & (eff <= 100))
+        df["Efficiency (%)"] = eff.where((eff >= 3.0) & (eff <= 100))
     if "Time (hours)" in df.columns:
         t = pd.to_numeric(df["Time (hours)"], errors="coerce")
         df["Time (hours)"] = t.where(t >= 0)
