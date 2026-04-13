@@ -421,6 +421,33 @@ def _trim_low_start_efficiency(df, min_start_eff: float = 10.0):
     return pd.concat(result, ignore_index=True) if result else df
 
 
+def _merge_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Coalesce columns that represent the same measurement but use different
+    Unicode characters or abbreviations in their header text.
+
+    For each alias group the first listed name is treated as the canonical
+    column name.  If the canonical column already exists it is filled from the
+    alias; if it doesn't yet exist the alias is simply renamed.  The original
+    alias column is dropped after merging.
+    """
+    COLUMN_ALIASES: dict[str, list[str]] = {
+        # µ (U+00B5) vs "micro" written out
+        "Conductivity (µS/cm)": ["Conductivity (micro S/cm)"],
+    }
+    for canonical, aliases in COLUMN_ALIASES.items():
+        for alias in aliases:
+            if alias not in df.columns:
+                continue
+            if canonical in df.columns:
+                # Fill NaN in the canonical column from the alias
+                df[canonical] = df[canonical].combine_first(df[alias])
+            else:
+                df = df.rename(columns={alias: canonical})
+            if alias in df.columns:
+                df = df.drop(columns=[alias])
+    return df
+
+
 def _clean_data(df):
     """Filter physically impossible values."""
     if "Efficiency (%)" in df.columns:
@@ -463,6 +490,7 @@ def fetch_all_tabs():
     combined = _fix_time_hours(combined)
     combined = _trim_low_start_efficiency(combined)
     combined = _parse_datetime(combined)
+    combined = _merge_duplicate_columns(combined)
     combined = _clean_data(combined)
 
     formal_runs   = combined["_run_id"].nunique() - combined[combined["_meta_informal"] == True]["_run_id"].nunique()

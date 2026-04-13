@@ -107,7 +107,24 @@ EXCLUDE_FROM_CORR = frozenset({
     "H2O2 current density (mA/cm2)",
     "Throughput (g/h)",
     "Avg. throughput (g/h)",
+    "Correction for strip 1",
+    "Correction for strip 2",
 })
+
+
+def _is_excluded_from_corr(col: str) -> bool:
+    """Return True if *col* should be excluded from correlation analysis.
+
+    Handles both the explicit exclusion set and pattern-based rules so that
+    we never accidentally correlate derived or circular columns.
+    """
+    if col in EXCLUDE_FROM_CORR:
+        return True
+    col_lower = col.lower()
+    # Any "average efficiency" or "avg. efficiency" variant is circular
+    if ("avg" in col_lower or "average" in col_lower) and "effic" in col_lower:
+        return True
+    return False
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -326,28 +343,38 @@ def build_chat_context(
         if "project" in rs.columns else "—"
     )
 
-    # Point-level Pearson correlations with Efficiency(%)
+    # Run-level Pearson correlations with Degradation Rate
     corr_lines = []
-    if "Efficiency (%)" in filtered_df.columns:
-        meta_cols = {c for c in filtered_df.columns if c.startswith("_")}
-        eff = pd.to_numeric(filtered_df["Efficiency (%)"], errors="coerce")
-        for col in filtered_df.columns:
-            if col in meta_cols or col == "Efficiency (%)" or col in EXCLUDE_FROM_CORR:
-                continue
-            if not pd.api.types.is_numeric_dtype(filtered_df[col]):
-                continue
-            x = pd.to_numeric(filtered_df[col], errors="coerce")
-            valid = eff.notna() & x.notna()
-            if valid.sum() >= 100:
-                r, _ = stats.pearsonr(x[valid], eff[valid])
-                corr_lines.append((col, r, int(valid.sum())))
-        corr_lines.sort(key=lambda t: abs(t[1]), reverse=True)
-        corr_text = "\n".join(
-            f"  {col:<35} r = {r:+.3f}  (n = {n})"
-            for col, r, n in corr_lines[:12]
+    meta_cols_set = {c for c in filtered_df.columns if c.startswith("_")}
+    numeric_cols = [
+        c for c in filtered_df.columns
+        if c not in meta_cols_set
+        and c != "Efficiency (%)"
+        and c != "Time (hours)"
+        and not _is_excluded_from_corr(c)
+        and pd.api.types.is_numeric_dtype(filtered_df[c])
+    ]
+    if numeric_cols:
+        run_means = filtered_df.groupby("_run_id")[numeric_cols].mean()
+        deg = (
+            rs[rs["deg_rate_%/100h"].notna()]
+            .set_index("run_id")["deg_rate_%/100h"]
         )
-    else:
-        corr_text = "  (no efficiency column found)"
+        common = run_means.index.intersection(deg.index)
+        if len(common) >= 4:
+            run_means = run_means.loc[common]
+            deg_aligned = deg.loc[common]
+            for col in numeric_cols:
+                x = run_means[col].dropna()
+                shared = x.index.intersection(deg_aligned.index)
+                if len(shared) >= 4:
+                    r, _ = stats.pearsonr(x.loc[shared], deg_aligned.loc[shared])
+                    corr_lines.append((col, r, len(shared)))
+            corr_lines.sort(key=lambda t: abs(t[1]), reverse=True)
+    corr_text = "\n".join(
+        f"  {col:<35} r = {r:+.3f}  (n={n} runs)"
+        for col, r, n in corr_lines[:12]
+    ) if corr_lines else "  (insufficient run data for correlations)"
 
     return f"""
 ## DATASET CONTEXT (currently filtered)
@@ -379,7 +406,8 @@ Positive = degrading, Negative = improving
 ### Project vs Degradation Rate
 {proj_agg if isinstance(proj_agg, str) else proj_agg.to_string()}
 
-### Point-Level Correlations with Faradaic Efficiency (%)
+### Run-Level Correlations with Degradation Rate (%/100h)
+(r > 0 → higher feature value associated with faster degradation)
 (High |r| near ±1 = strong relationship)
 {corr_text}
 
@@ -454,43 +482,103 @@ def fig_trajectories(
     return fig
 
 
-def fig_corr_bars(filtered_df: pd.DataFrame) -> plt.Figure:
+def fig_run_level_corr(
+    filtered_df: pd.DataFrame,
+    filtered_stats: pd.DataFrame,
+) -> plt.Figure:
+    """Run-level correlation: correlate per-run MEAN of each feature against
+    the run's degradation rate (%/100h).
+
+    This answers the scientifically relevant question: do runs where a given
+    parameter is higher on average tend to degrade faster?  It avoids the
+    spurious correlations that arise from mixing many time-points across runs
+    with different conditions (Simpson's paradox / within-run autocorrelation).
+
+    Colour coding:
+      Red  — positive r → higher feature value  associated with faster degradation
+      Green — negative r → higher feature value associated with slower degradation
+    """
     meta_cols = {c for c in filtered_df.columns if c.startswith("_")}
-    eff = pd.to_numeric(filtered_df.get("Efficiency (%)", pd.Series(dtype=float)), errors="coerce")
 
-    corrs = {}
-    for col in filtered_df.columns:
-        if col in meta_cols or col == "Efficiency (%)" or col in EXCLUDE_FROM_CORR:
-            continue
-        if not pd.api.types.is_numeric_dtype(filtered_df[col]):
-            continue
-        x = pd.to_numeric(filtered_df[col], errors="coerce")
-        valid = eff.notna() & x.notna()
-        if valid.sum() >= 100:
-            r, _ = stats.pearsonr(x[valid], eff[valid])
-            corrs[col] = r
+    numeric_cols = [
+        c for c in filtered_df.columns
+        if c not in meta_cols
+        and c != "Efficiency (%)"
+        and c != "Time (hours)"
+        and not _is_excluded_from_corr(c)
+        and pd.api.types.is_numeric_dtype(filtered_df[c])
+    ]
 
-    if not corrs:
+    def _empty(msg: str) -> plt.Figure:
         fig, ax = plt.subplots(figsize=(8, 3))
-        ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center", fontsize=12)
+        ax.text(0.5, 0.5, msg, ha="center", va="center", fontsize=12, color="#94a3b8")
         ax.axis("off")
         return fig
 
-    cdf = (
-        pd.Series(corrs)
-        .to_frame("r")
-        .assign(abs_r=lambda d: d["r"].abs())
-        .sort_values("abs_r", ascending=False)
-        .head(12)
+    if not numeric_cols:
+        return _empty("No numeric features available")
+
+    # Per-run mean for each candidate feature
+    run_means = filtered_df.groupby("_run_id")[numeric_cols].mean()
+
+    # Degradation rates (exclude short / no_data / inconclusive runs)
+    deg = (
+        filtered_stats[filtered_stats["deg_rate_%/100h"].notna()]
+        .set_index("run_id")["deg_rate_%/100h"]
     )
 
-    fig, ax = plt.subplots(figsize=(9, max(4, len(cdf) * 0.45)))
-    colors = [COLORS["degrading"] if r < 0 else COLORS["stable"] for r in cdf["r"]]
-    ax.barh(cdf.index[::-1], cdf["r"][::-1], color=colors[::-1], edgecolor="white")
-    ax.axvline(0, color="black", linewidth=0.8)
-    ax.set_xlabel("Pearson r with Efficiency (%)", fontsize=11)
-    ax.set_title("Feature correlations with Faradaic Efficiency (point-level)", fontsize=12)
-    ax.grid(axis="x", alpha=0.25)
+    common_runs = run_means.index.intersection(deg.index)
+    if len(common_runs) < 4:
+        return _empty("Need ≥4 runs with degradation data")
+
+    run_means = run_means.loc[common_runs]
+    deg = deg.loc[common_runs]
+
+    corrs = {}
+    for col in numeric_cols:
+        x = run_means[col].dropna()
+        shared = x.index.intersection(deg.index)
+        if len(shared) < 4:
+            continue
+        r, _ = stats.pearsonr(x.loc[shared], deg.loc[shared])
+        corrs[col] = (r, len(shared))
+
+    if not corrs:
+        return _empty("Insufficient overlapping data for run-level correlations")
+
+    cdf = (
+        pd.DataFrame.from_dict(corrs, orient="index", columns=["r", "n"])
+        .assign(abs_r=lambda d: d["r"].abs())
+        .sort_values("abs_r", ascending=False)
+        .head(15)
+    )
+
+    fig, ax = plt.subplots(figsize=(9, max(4, len(cdf) * 0.52)))
+    bar_colors = [COLORS["degrading"] if r > 0 else COLORS["stable"] for r in cdf["r"]]
+    bars = ax.barh(
+        cdf.index[::-1], cdf["r"][::-1],
+        color=bar_colors[::-1], edgecolor="none", height=0.65,
+    )
+
+    # Annotate each bar with the run count
+    for bar, (_, row) in zip(bars, cdf[::-1].iterrows()):
+        x_pos = bar.get_width()
+        ax.text(
+            x_pos + (0.01 if x_pos >= 0 else -0.01),
+            bar.get_y() + bar.get_height() / 2,
+            f"n={int(row['n'])}",
+            va="center", ha="left" if x_pos >= 0 else "right",
+            fontsize=8.5, color="#94a3b8",
+        )
+
+    ax.axvline(0, color="#475569", linewidth=0.8)
+    ax.set_xlabel("Pearson r with Degradation Rate (%/100h)", fontsize=11)
+    ax.set_title(
+        "Feature correlations with Degradation Rate (run-level)\n"
+        "Red = faster degradation  ·  Green = slower degradation",
+        fontsize=11,
+    )
+    ax.grid(axis="x", alpha=0.2)
     fig.tight_layout()
     return fig
 
@@ -1091,15 +1179,18 @@ def main():
 
         with corr_l:
             st.markdown(
-                "**Numerical features vs Efficiency (%)** — point-level Pearson r  \n"
-                "Red = negative correlation (higher value → lower efficiency)"
+                "**Numerical features vs Degradation Rate** — run-level Pearson r  \n"
+                "Each bar = correlation between the per-run mean of a feature and "
+                "that run's degradation rate (%/100h).  "
+                "🔴 Red = higher value → faster degradation · "
+                "🟢 Green = higher value → slower degradation"
             )
-            fig = fig_corr_bars(filtered_df)
+            fig = fig_run_level_corr(filtered_df, filtered_stats)
             st.pyplot(fig)
             st.download_button(
                 label="⬇️ Download chart (PNG)",
                 data=fig_to_png_bytes(fig),
-                file_name=f"hpnow_correlations_{datetime.now().strftime('%Y%m%d_%H%M')}.png",
+                file_name=f"hpnow_run_level_corr_{datetime.now().strftime('%Y%m%d_%H%M')}.png",
                 mime="image/png",
                 use_container_width=True,
                 key="dl_corr_bars",
