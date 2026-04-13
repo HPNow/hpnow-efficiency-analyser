@@ -395,6 +395,46 @@ def _coerce_numerics(df):
     return df
 
 
+def _normalize_run_times(df):
+    """Shift each run's Time (hours) so its earliest measurement starts at 0.
+
+    Fixes cases where the time column is cumulative across the whole sheet
+    and was never reset between runs (e.g. a run appearing to start at 7,000 h).
+    """
+    if "Time (hours)" not in df.columns or "_run_id" not in df.columns:
+        return df
+    t = pd.to_numeric(df["Time (hours)"], errors="coerce")
+    run_min = t.groupby(df["_run_id"]).transform("min")
+    df["Time (hours)"] = (t - run_min).clip(lower=0)
+    return df
+
+
+def _trim_low_start_efficiency(df, min_start_eff: float = 10.0):
+    """Drop leading rows of each run where Efficiency (%) < min_start_eff.
+
+    Readings below 10 % at the very start of a run are measurement errors
+    (sensor warm-up, priming artefacts, etc.).  Once efficiency has risen
+    above the threshold for the first time, subsequent low readings are
+    kept — they represent genuine degradation, not start-up noise.
+    """
+    if "Efficiency (%)" not in df.columns or "_run_id" not in df.columns:
+        return df
+
+    result = []
+    for _, grp in df.groupby("_run_id", sort=False):
+        if "Time (hours)" in grp.columns:
+            grp = grp.sort_values("Time (hours)")
+        eff = pd.to_numeric(grp["Efficiency (%)"], errors="coerce")
+        above = eff >= min_start_eff
+        if above.any():
+            # Drop every row that comes before the first good reading
+            first_good_pos = int(above.values.argmax())
+            grp = grp.iloc[first_good_pos:]
+        result.append(grp)
+
+    return pd.concat(result, ignore_index=True) if result else df
+
+
 def _clean_data(df):
     """Filter physically impossible values."""
     if "Efficiency (%)" in df.columns:
@@ -435,6 +475,8 @@ def fetch_all_tabs():
     combined = pd.concat(all_dfs, ignore_index=True, sort=False)
     combined = _coerce_numerics(combined)
     combined = _fix_time_hours(combined)
+    combined = _normalize_run_times(combined)
+    combined = _trim_low_start_efficiency(combined)
     combined = _parse_datetime(combined)
     combined = _clean_data(combined)
 
