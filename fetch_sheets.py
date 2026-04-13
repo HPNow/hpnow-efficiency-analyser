@@ -395,20 +395,6 @@ def _coerce_numerics(df):
     return df
 
 
-def _normalize_run_times(df):
-    """Shift each run's Time (hours) so its earliest measurement starts at 0.
-
-    Fixes cases where the time column is cumulative across the whole sheet
-    and was never reset between runs (e.g. a run appearing to start at 7,000 h).
-    """
-    if "Time (hours)" not in df.columns or "_run_id" not in df.columns:
-        return df
-    t = pd.to_numeric(df["Time (hours)"], errors="coerce")
-    run_min = t.groupby(df["_run_id"]).transform("min")
-    df["Time (hours)"] = (t - run_min).clip(lower=0)
-    return df
-
-
 def _trim_low_start_efficiency(df, min_start_eff: float = 10.0):
     """Drop leading rows of each run where Efficiency (%) < min_start_eff.
 
@@ -475,7 +461,6 @@ def fetch_all_tabs():
     combined = pd.concat(all_dfs, ignore_index=True, sort=False)
     combined = _coerce_numerics(combined)
     combined = _fix_time_hours(combined)
-    combined = _normalize_run_times(combined)
     combined = _trim_low_start_efficiency(combined)
     combined = _parse_datetime(combined)
     combined = _clean_data(combined)
