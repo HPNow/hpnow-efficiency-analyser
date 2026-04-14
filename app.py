@@ -9,6 +9,7 @@ Primary analytical focus:
 
 import io
 import os
+import re
 import json
 import logging
 import warnings
@@ -97,50 +98,60 @@ MIN_POINTS_FOR_REGRESSION = 4
 DEGRADING_SLOPE  = -0.03   # worse than –3%/100h → degrading
 IMPROVING_SLOPE  =  0.01   # better  than +1%/100h → improving
 
-# Columns that are mathematically derived from Efficiency (%) and must be
-# excluded from correlation analysis to avoid circular/spurious results.
-# "H2O2 current (A)" = Efficiency(%) / 100 × Current(A), so it is not
-# an independent variable.
-EXCLUDE_FROM_CORR = frozenset({
-    # Derived from Efficiency (%) — circular
-    "H2O2 current (A)",
-    "H2O2 current (mA)",
-    "H2O2 current density (mA/cm2)",
-    "Throughput (g/h)",
-    "Avg. throughput (g/h)",
-    # Voltage setpoints — control inputs, not process outcomes
-    "Set point (V)",
-    "voltage setpoint (V)",
-    # Strip-correction intermediates (exact names from sheet)
-    "Correction for strip 1",
-    'Correction for strip 1 "m"',
-    'Correction for strip 1 "b"',
-    "Correction for strip 2",
-    'Correction for strip 2 "b"',
-    "Corrected strip 1",
-    "Corrected strip 2",
-})
+# Whitelist of features for correlation analysis.
+# Each entry: (canonical display name, [column name variants in order of preference]).
+# Variants are coalesced — first non-null value wins per row.
+# Notes:
+#   • "Oxygen (LPM)" is the legacy name for "Gas (LPM)" in older datasets.
+#   • "Average Voltage (V)" falls back to deriving from Voltage (V)* sub-columns
+#     if no dedicated average-voltage column is present.
+#   • "Average (wt%)" is the H2O2 concentration average from strip tests.
+#   • Throughput (g/h) is shown for completeness but is mathematically coupled
+#     to efficiency (Throughput ∝ Efficiency × Current); interpret with care.
+CORR_FEATURE_SPECS: list[tuple[str, list[str]]] = [
+    ("Current (A)",          ["Current (A)"]),
+    ("Voltage (V)",          ["Voltage (V)"]),
+    ("Average Voltage (V)",  ["Average Voltage (V)", "Avg. Voltage (V)", "Avg Voltage (V)"]),
+    ("Average (wt%)",        ["Average"]),
+    ("Gas (LPM)",            ["Gas (LPM)", "Oxygen (LPM)"]),
+    ("Water flow (mL/s)",    ["Water flow (mL/s)", "Water Flow (mL/s)", "Water flow (ml/s)"]),
+    ("Throughput (g/h)",     ["Throughput (g/h)"]),
+    ("Conductivity (µS/cm)", ["Conductivity (µS/cm)", "Conductivity (micro S/cm)"]),
+    ("Diff Pressure (mbar)", ["Diff Pressure (mbar)", "Diff pressure (mbar)", "Diff. Pressure (mbar)"]),
+    ("STK temp Ca out",      ["STK temp Ca out", "STK Temp Ca out", "STK temp ca out"]),
+]
 
 
-def _is_excluded_from_corr(col: str) -> bool:
-    """Return True if *col* should be excluded from correlation analysis.
+def _build_corr_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a DataFrame with canonical column names ready for correlation.
 
-    Handles both the explicit exclusion set and pattern-based rules so that
-    we never accidentally correlate derived or circular columns.
+    For each entry in CORR_FEATURE_SPECS:
+      - Finds which variant column names exist in *df*
+      - Coalesces multiple variants (first non-null wins per row)
+    For "Average Voltage (V)" specifically: if no variant is found, falls back
+    to the row-wise mean of any columns matching "Voltage (V)*" (multi-cell stacks).
     """
-    if col in EXCLUDE_FROM_CORR:
-        return True
-    col_lower = col.lower()
-    # Any "average efficiency" or "avg. efficiency" variant is circular
-    if ("avg" in col_lower or "average" in col_lower) and "effic" in col_lower:
-        return True
-    # Catch any remaining strip-correction or corrected-strip variants
-    if "correction for strip" in col_lower or "corrected strip" in col_lower:
-        return True
-    # Catch any voltage setpoint variants
-    if "setpoint" in col_lower and "v" in col_lower:
-        return True
-    return False
+    result = pd.DataFrame(index=df.index)
+    for canonical, variants in CORR_FEATURE_SPECS:
+        found = [v for v in variants if v in df.columns]
+        if not found and canonical == "Average Voltage (V)":
+            volt_cols = [
+                c for c in df.columns
+                if re.match(r"voltage\s*\(v\)", c, re.IGNORECASE)
+                and pd.api.types.is_numeric_dtype(df[c])
+            ]
+            if volt_cols:
+                result[canonical] = (
+                    df[volt_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1)
+                )
+            continue
+        if not found:
+            continue
+        merged = pd.to_numeric(df[found[0]], errors="coerce")
+        for col in found[1:]:
+            merged = merged.combine_first(pd.to_numeric(df[col], errors="coerce"))
+        result[canonical] = merged
+    return result
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -359,19 +370,13 @@ def build_chat_context(
         if "project" in rs.columns else "—"
     )
 
-    # Run-level Pearson correlations with Degradation Rate
+    # Run-level Pearson correlations with Degradation Rate (same whitelist as chart)
     corr_lines = []
-    meta_cols_set = {c for c in filtered_df.columns if c.startswith("_")}
-    numeric_cols = [
-        c for c in filtered_df.columns
-        if c not in meta_cols_set
-        and c != "Efficiency (%)"
-        and c != "Time (hours)"
-        and not _is_excluded_from_corr(c)
-        and pd.api.types.is_numeric_dtype(filtered_df[c])
-    ]
-    if numeric_cols:
-        run_means = filtered_df.groupby("_run_id")[numeric_cols].mean()
+    _corr_df = _build_corr_df(filtered_df)
+    _canonical_cols = list(_corr_df.columns)
+    if _canonical_cols:
+        _corr_df["_run_id"] = filtered_df["_run_id"].values
+        run_means = _corr_df.groupby("_run_id")[_canonical_cols].mean()
         deg = (
             rs[rs["deg_rate_%/100h"].notna()]
             .set_index("run_id")["deg_rate_%/100h"]
@@ -380,7 +385,7 @@ def build_chat_context(
         if len(common) >= 4:
             run_means = run_means.loc[common]
             deg_aligned = deg.loc[common]
-            for col in numeric_cols:
+            for col in _canonical_cols:
                 x = run_means[col].dropna()
                 shared = x.index.intersection(deg_aligned.index)
                 if len(shared) >= 4:
@@ -517,16 +522,8 @@ def fig_run_level_corr(
       Red  — positive r → higher feature value  associated with faster degradation
       Green — negative r → higher feature value associated with slower degradation
     """
-    meta_cols = {c for c in filtered_df.columns if c.startswith("_")}
-
-    numeric_cols = [
-        c for c in filtered_df.columns
-        if c not in meta_cols
-        and c != "Efficiency (%)"
-        and c != "Time (hours)"
-        and not _is_excluded_from_corr(c)
-        and pd.api.types.is_numeric_dtype(filtered_df[c])
-    ]
+    corr_df = _build_corr_df(filtered_df)
+    canonical_cols = list(corr_df.columns)
 
     def _empty(msg: str) -> plt.Figure:
         fig, ax = plt.subplots(figsize=(8, 3))
@@ -534,11 +531,11 @@ def fig_run_level_corr(
         ax.axis("off")
         return fig
 
-    if not numeric_cols:
-        return _empty("No numeric features available")
+    if not canonical_cols:
+        return _empty("No matching feature columns found in this dataset")
 
-    # Per-run mean for each candidate feature
-    run_means = filtered_df.groupby("_run_id")[numeric_cols].mean()
+    corr_df["_run_id"] = filtered_df["_run_id"].values
+    run_means = corr_df.groupby("_run_id")[canonical_cols].mean()
 
     # Degradation rates (exclude short / no_data / inconclusive runs)
     deg = (
@@ -554,7 +551,7 @@ def fig_run_level_corr(
     deg = deg.loc[common_runs]
 
     corrs = {}
-    for col in numeric_cols:
+    for col in canonical_cols:
         x = run_means[col].dropna()
         shared = x.index.intersection(deg.index)
         if len(shared) < 4:
@@ -569,8 +566,12 @@ def fig_run_level_corr(
         pd.DataFrame.from_dict(corrs, orient="index", columns=["r", "n"])
         .assign(abs_r=lambda d: d["r"].abs())
         .sort_values("abs_r", ascending=False)
-        .head(15)
     )
+    # Mark Throughput as coupled to efficiency
+    cdf.index = [
+        f"{name} *" if name == "Throughput (g/h)" else name
+        for name in cdf.index
+    ]
 
     fig, ax = plt.subplots(figsize=(9, max(4, len(cdf) * 0.52)))
     bar_colors = [COLORS["degrading"] if r > 0 else COLORS["stable"] for r in cdf["r"]]
@@ -598,7 +599,13 @@ def fig_run_level_corr(
         fontsize=11,
     )
     ax.grid(axis="x", alpha=0.2)
-    fig.tight_layout()
+    if any("*" in idx for idx in cdf.index):
+        fig.text(
+            0.01, 0.01,
+            "* Throughput (g/h) is mathematically coupled to efficiency — interpret with care.",
+            fontsize=7.5, color="#94a3b8", ha="left", va="bottom",
+        )
+    fig.tight_layout(rect=[0, 0.03, 1, 1])
     return fig
 
 
