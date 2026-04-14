@@ -477,10 +477,13 @@ def fig_trajectories(
 
         t_vals   = run_df["Time (hours)"]
         eff_vals = run_df["Efficiency (%)"]
-        # Glow effect: wide soft halo + sharp core line
-        ax.plot(t_vals, eff_vals, linewidth=5,   alpha=0.07, color=color)
-        ax.plot(t_vals, eff_vals, linewidth=2.5, alpha=0.20, color=color)
-        ax.plot(t_vals, eff_vals, linewidth=1.2, alpha=0.90, color=color)
+        if len(selected_run_ids) <= 150:
+            # Glow effect: wide soft halo + sharp core line
+            ax.plot(t_vals, eff_vals, linewidth=5,   alpha=0.07, color=color)
+            ax.plot(t_vals, eff_vals, linewidth=2.5, alpha=0.20, color=color)
+            ax.plot(t_vals, eff_vals, linewidth=1.2, alpha=0.90, color=color)
+        else:
+            ax.plot(t_vals, eff_vals, linewidth=0.8, alpha=0.55, color=color)
         plotted += 1
 
     ax.set_xlabel("Time (hours)", fontsize=11)
@@ -1137,7 +1140,8 @@ def main():
                 "Colour lines by",
                 ["Degradation rate", "Classification label"],
             )
-            max_runs = st.slider("Max runs to show", 5, 150, 40)
+            _traj_total = len(filtered_stats)
+            max_runs = st.slider("Max runs to show", 5, max(_traj_total, 5), min(40, _traj_total))
             sort_worst_first = st.toggle("Worst-degrading first", value=True)
 
             traj_stations = st.multiselect(
