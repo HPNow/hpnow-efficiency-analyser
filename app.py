@@ -128,18 +128,39 @@ def _build_corr_df(df: pd.DataFrame) -> pd.DataFrame:
     For each entry in CORR_FEATURE_SPECS:
       - Finds which variant column names exist in *df*
       - Coalesces multiple variants (first non-null wins per row)
-    For "Average Voltage (V)" specifically: if no variant is found, falls back
-    to the row-wise mean of any columns matching "Voltage (V)*" (multi-cell stacks).
+    For "Average Voltage (V)": if no variant is found, falls back to the
+    row-wise mean of any Voltage (V)* columns (multi-cell stacks).
+    For "Gas (LPM)": normalised per cell → stored as "Gas (LPM/cell)".
+      n_cells comes from _meta_n_cells; if absent, falls back to counting
+      Voltage (V)* columns that have data within each run.
     """
+    # ── Determine n_cells per row ────────────────────────────────────────────
+    volt_cols = [
+        c for c in df.columns
+        if re.match(r"^Voltage \(V\)(_\d+)?$", c)
+        and pd.api.types.is_numeric_dtype(df[c])
+    ]
+    if "_meta_n_cells" in df.columns:
+        n_cells_series = pd.to_numeric(df["_meta_n_cells"], errors="coerce")
+    else:
+        n_cells_series = pd.Series(np.nan, index=df.index)
+
+    if volt_cols and n_cells_series.isna().any() and "_run_id" in df.columns:
+        # Count how many Voltage columns have any non-NaN value within each run
+        run_volt_counts = (
+            df.groupby("_run_id")[volt_cols]
+            .transform(lambda g: int(g.notna().any().sum()))
+            .iloc[:, 0]  # same value for every voltage col — just take the first
+        )
+        n_cells_series = n_cells_series.combine_first(run_volt_counts.astype(float))
+
+    n_cells_series = n_cells_series.fillna(1).clip(lower=1)
+
+    # ── Build canonical columns ──────────────────────────────────────────────
     result = pd.DataFrame(index=df.index)
     for canonical, variants in CORR_FEATURE_SPECS:
         found = [v for v in variants if v in df.columns]
         if not found and canonical == "Average Voltage (V)":
-            volt_cols = [
-                c for c in df.columns
-                if re.match(r"voltage\s*\(v\)", c, re.IGNORECASE)
-                and pd.api.types.is_numeric_dtype(df[c])
-            ]
             if volt_cols:
                 result[canonical] = (
                     df[volt_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1)
@@ -150,7 +171,10 @@ def _build_corr_df(df: pd.DataFrame) -> pd.DataFrame:
         merged = pd.to_numeric(df[found[0]], errors="coerce")
         for col in found[1:]:
             merged = merged.combine_first(pd.to_numeric(df[col], errors="coerce"))
-        result[canonical] = merged
+        if canonical == "Gas (LPM)":
+            result["Gas (LPM/cell)"] = merged / n_cells_series.values
+        else:
+            result[canonical] = merged
     return result
 
 # ── Page config ───────────────────────────────────────────────────────────────
