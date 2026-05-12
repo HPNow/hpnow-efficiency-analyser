@@ -38,9 +38,15 @@ INHERITABLE_META = (
     "foam_grid", "project", "cabinet", "operation_note",
 )
 
+# First-column values that identify a data-section header row.
+# Live sheets may start with "Date" instead of "Time (hours)".
+DATA_HEADER_FIRST_COL = frozenset({
+    "Time (hours)", "Time (h)", "Date", "Date ",
+})
+
 # Row labels to skip when collecting data rows (summaries / sub-headers)
 SKIP_LABELS = frozenset({
-    "Time (hours)", "Time (h)", "Last measured hour", "Last measured efficiency",
+    "Time (hours)", "Time (h)", "Date", "Last measured hour", "Last measured efficiency",
     "Latest comment", "Gap", "Date start", "Cell area",
     "Current ", "Current", "Project", "Cabinet",
 })
@@ -230,11 +236,11 @@ def _parse_tab(worksheet):
                 if meta.get(key):
                     last_formal_meta[key] = meta[key]
 
-            # Find "Time (hours)" / "Time (h)" header from i+1
+            # Find data-section header row from i+1
             k = i + 1
             while k < len(raw):
                 r0 = raw[k][0].strip() if raw[k] else ""
-                if r0 in ("Time (hours)", "Time (h)"):
+                if r0 in DATA_HEADER_FIRST_COL:
                     break
                 if _is_formal_boundary(raw[k]) or INFORMAL_BOUNDARY.match(r0):
                     k = -1  # signal: no header before next boundary
@@ -272,7 +278,7 @@ def _parse_tab(worksheet):
             found_new_header = False
             while k < min(i + 4, len(raw)):
                 r0 = raw[k][0].strip() if raw[k] else ""
-                if r0 in ("Time (hours)", "Time (h)"):
+                if r0 in DATA_HEADER_FIRST_COL:
                     last_headers = _dedup_headers(raw[k])
                     found_new_header = True
                     k += 1  # data starts after header
@@ -462,6 +468,33 @@ def _trim_low_start_efficiency(df, min_start_eff: float = 10.0):
     return pd.concat(result, ignore_index=True) if result else df
 
 
+def _derive_time_from_datetime(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute elapsed hours from _datetime when no explicit time column exists.
+
+    Live sheets log by calendar date rather than elapsed hours.  This derives
+    Time (hours) as hours since the first data point in each run so that graphs
+    and duration calculations work correctly.
+    """
+    if "Time (hours)" in df.columns:
+        # Column already present (historic sheets); don't overwrite.
+        # But fill any NaN values from datetime if available.
+        if "_datetime" not in df.columns or "_run_id" not in df.columns:
+            return df
+        has_time = df["Time (hours)"].notna().any()
+        if has_time:
+            return df
+
+    if "_datetime" not in df.columns or "_run_id" not in df.columns:
+        return df
+
+    run_start = df.groupby("_run_id")["_datetime"].transform("min")
+    elapsed = (df["_datetime"] - run_start).dt.total_seconds() / 3600
+    elapsed = elapsed.where(elapsed >= 0)
+    if elapsed.notna().any():
+        df["Time (hours)"] = elapsed
+    return df
+
+
 def _merge_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Coalesce columns that represent the same measurement but use different
     Unicode characters or abbreviations in their header text.
@@ -545,6 +578,7 @@ def fetch_all_tabs():
     combined = _fix_time_hours(combined)
     combined = _trim_low_start_efficiency(combined)
     combined = _parse_datetime(combined)
+    combined = _derive_time_from_datetime(combined)
     combined = _merge_duplicate_columns(combined)
     combined = _clean_data(combined)
 
