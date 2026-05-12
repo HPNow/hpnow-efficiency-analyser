@@ -44,6 +44,7 @@ plt.rcParams.update({
 import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import seaborn as sns
 import streamlit as st
 from scipy import stats
@@ -530,6 +531,113 @@ def fig_trajectories(
         plt.colorbar(sm, ax=ax, label="Deg. rate (%/100h)", shrink=0.85)
 
     fig.tight_layout()
+    return fig
+
+
+def fig_trajectories_plotly(
+    filtered_df: pd.DataFrame,
+    filtered_stats: pd.DataFrame,
+    selected_run_ids: list,
+    color_by: str,
+) -> go.Figure:
+    """Interactive Plotly version of the trajectories chart with hover metadata."""
+    deg_series  = filtered_stats.set_index("run_id")["deg_rate_%/100h"]
+    label_series = filtered_stats.set_index("run_id")["label"]
+    meta = filtered_stats.set_index("run_id")
+
+    vmin = filtered_stats["deg_rate_%/100h"].quantile(0.05)
+    vmax = filtered_stats["deg_rate_%/100h"].quantile(0.95)
+    vrange = vmax - vmin if vmax > vmin else 1.0
+
+    def _deg_color(dr: float) -> str:
+        if np.isnan(dr):
+            return "#64748b"
+        t = max(0.0, min(1.0, (dr - vmin) / vrange))
+        r = int(220 * t + 30 * (1 - t))
+        g = int(200 * (1 - t) + 70 * t)
+        b = 60
+        return f"rgb({r},{g},{b})"
+
+    fig = go.Figure()
+    plotted = 0
+
+    for run_id in selected_run_ids:
+        run_df = (
+            filtered_df[filtered_df["_run_id"] == run_id]
+            .dropna(subset=["Time (hours)", "Efficiency (%)"])
+            .sort_values("Time (hours)")
+        )
+        if len(run_df) < 2:
+            continue
+
+        dr     = deg_series.get(run_id, np.nan)
+        label  = label_series.get(run_id, "inconclusive")
+        row    = meta.loc[run_id] if run_id in meta.index else {}
+        stack  = row.get("stack_id", "—") if hasattr(row, "get") else "—"
+        op     = row.get("operator", "—") if hasattr(row, "get") else "—"
+        gdl    = row.get("gdl", "—") if hasattr(row, "get") else "—"
+        date   = row.get("date_start", "—") if hasattr(row, "get") else "—"
+        proj   = row.get("project", "—") if hasattr(row, "get") else "—"
+        dur    = row.get("duration_h", np.nan) if hasattr(row, "get") else np.nan
+        dr_str = f"{dr:.2f} %/100h" if not np.isnan(dr) else "—"
+        dur_str = f"{dur:.0f} h" if not np.isnan(float(dur)) else "—"
+
+        color = _deg_color(dr) if color_by == "Degradation rate" else COLORS.get(label, "#64748b")
+
+        hover = (
+            f"<b>{run_id}</b><br>"
+            f"Stack: {stack}<br>"
+            f"Operator: {op}<br>"
+            f"GDL: {gdl}<br>"
+            f"Date: {date}<br>"
+            f"Project: {proj}<br>"
+            f"Deg. rate: {dr_str}<br>"
+            f"Duration: {dur_str}<br>"
+            f"Status: {label}"
+            "<extra></extra>"
+        )
+
+        fig.add_trace(go.Scatter(
+            x=run_df["Time (hours)"],
+            y=run_df["Efficiency (%)"],
+            mode="lines",
+            line=dict(color=color, width=1.5),
+            opacity=0.85,
+            name=run_id,
+            hovertemplate=hover,
+            showlegend=False,
+        ))
+        plotted += 1
+
+    # Invisible colorbar trace for the degradation-rate legend
+    if color_by == "Degradation rate":
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers",
+            marker=dict(
+                colorscale=[[0, "rgb(30,200,60)"], [0.5, "rgb(220,200,30)"], [1, "rgb(220,70,60)"]],
+                cmin=vmin, cmax=vmax,
+                colorbar=dict(
+                    title=dict(text="Deg. rate<br>(%/100h)", font=dict(size=11)),
+                    thickness=12, len=0.75,
+                    tickfont=dict(size=9),
+                ),
+                showscale=True, color=[0],
+            ),
+            showlegend=False,
+        ))
+
+    fig.update_layout(
+        paper_bgcolor="#0f1623",
+        plot_bgcolor="#080c18",
+        font=dict(color="#e2e8f0", size=11),
+        xaxis=dict(title="Time (hours)", gridcolor="#1e3a5f", linecolor="#1e3a5f", zeroline=False),
+        yaxis=dict(title="Faradaic Efficiency (%)", gridcolor="#1e3a5f", linecolor="#1e3a5f",
+                   range=[0, 105], zeroline=False),
+        title=dict(text=f"Efficiency Trajectories  ({plotted} runs)", font=dict(size=14)),
+        hovermode="closest",
+        height=460,
+        margin=dict(l=60, r=20, t=50, b=50),
+    )
     return fig
 
 
@@ -1079,13 +1187,14 @@ def main():
     # ── Tabs ──────────────────────────────────────────────────────────────────
     _n_runs     = len(filtered_stats)
     _n_stations = filtered_stats["station"].nunique()
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         f"📉 Degradation Overview  ({_n_runs} runs)",
         "📈 Efficiency Trajectories",
         "🔍 Correlations",
         f"🏭 Station Comparison  ({_n_stations} stations)",
         "💬 Ask AI",
         "➕ Migrate Run",
+        "🔬 Run Detail",
     ])
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1192,16 +1301,8 @@ def main():
             if traj.empty:
                 st.info("No runs match the trajectory filters.")
             else:
-                fig = fig_trajectories(filtered_df, filtered_stats, traj["run_id"].tolist(), color_by)
-                st.pyplot(fig)
-                st.download_button(
-                    label="⬇️ Download chart (PNG)",
-                    data=fig_to_png_bytes(fig),
-                    file_name=f"hpnow_trajectories_{datetime.now().strftime('%Y%m%d_%H%M')}.png",
-                    mime="image/png",
-                    use_container_width=True,
-                )
-                plt.close(fig)
+                fig = fig_trajectories_plotly(filtered_df, filtered_stats, traj["run_id"].tolist(), color_by)
+                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"format": "png", "filename": "hpnow_trajectories"}})
 
                 if color_by == "Classification label":
                     cols = st.columns(5)
@@ -1699,6 +1800,182 @@ def main():
                                         st.rerun()
                                     except Exception as _e:
                                         st.error(f"Migration failed: {_e}")
+
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  TAB 7 — RUN DETAIL
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab7:
+        st.subheader("Run Detail")
+        st.caption("Explore a single run: full metadata, efficiency trajectory, and supporting measurements.")
+
+        def _fmt(val) -> str:
+            if val is None:
+                return "—"
+            try:
+                if pd.isna(val):
+                    return "—"
+            except Exception:
+                pass
+            s = str(val).strip()
+            return s if s and s not in ("nan", "None") else "—"
+
+        # Use the full unfiltered dataset so any run is reachable regardless of filters.
+        all_station_opts = sorted(run_stats["station"].unique())
+        detail_station = st.selectbox(
+            "Station", options=all_station_opts,
+            index=None, placeholder="Select a station…",
+            key="detail_station",
+        )
+
+        if detail_station:
+            station_runs = run_stats[run_stats["station"] == detail_station].sort_values("run_id")
+
+            def _run_label(rid: str) -> str:
+                row = station_runs[station_runs["run_id"] == rid]
+                date = _fmt(row["date_start"].iloc[0]) if not row.empty else "—"
+                stack = _fmt(row["stack_id"].iloc[0]) if not row.empty else "—"
+                return f"{rid}  ·  {date}  ·  {stack}"
+
+            detail_run = st.selectbox(
+                "Run", options=station_runs["run_id"].tolist(),
+                index=None, placeholder="Select a run…",
+                key="detail_run",
+                format_func=_run_label,
+            )
+
+            if detail_run:
+                rrow    = station_runs[station_runs["run_id"] == detail_run].iloc[0]
+                run_raw = df[df["_run_id"] == detail_run].sort_values("Time (hours)")
+
+                # ── Metadata card ─────────────────────────────────────────────
+                with st.container(border=True):
+                    m1, m2, m3, m4, m5 = st.columns(5)
+                    m1.metric("Stack ID",   _fmt(rrow.get("stack_id")))
+                    m2.metric("Operator",   _fmt(rrow.get("operator")))
+                    m3.metric("Date start", _fmt(rrow.get("date_start")))
+                    m4.metric("Duration",   f"{rrow['duration_h']:.0f} h" if not pd.isna(rrow["duration_h"]) else "—")
+                    m5.metric("Status",     _fmt(rrow.get("label")))
+
+                    m6, m7, m8, m9, m10 = st.columns(5)
+                    m6.metric("GDL",             _fmt(rrow.get("gdl")))
+                    m7.metric("Current (mA/cm²)", _fmt(rrow.get("current_mA_cm2")))
+                    m8.metric("Project",          _fmt(rrow.get("project")))
+                    m9.metric("Start eff.",        f"{rrow['eff_start_%']:.1f}%" if not pd.isna(rrow["eff_start_%"]) else "—")
+                    m10.metric("End eff.",          f"{rrow['eff_end_%']:.1f}%" if not pd.isna(rrow["eff_end_%"]) else "—")
+
+                    deg = rrow.get("deg_rate_%/100h")
+                    aim = _fmt(rrow.get("aim"))
+                    note_parts = []
+                    if not pd.isna(deg):
+                        note_parts.append(f"**Deg. rate:** {deg:.2f} %/100h")
+                    if aim != "—":
+                        note_parts.append(f"**Aim:** {aim}")
+                    if note_parts:
+                        st.caption("  ·  ".join(note_parts))
+
+                # ── Efficiency chart ──────────────────────────────────────────
+                eff_data = run_raw.dropna(subset=["Time (hours)", "Efficiency (%)"])
+                if not eff_data.empty:
+                    fig_eff = go.Figure()
+                    fig_eff.add_trace(go.Scatter(
+                        x=eff_data["Time (hours)"],
+                        y=eff_data["Efficiency (%)"],
+                        mode="lines+markers",
+                        line=dict(color="#0096ff", width=2),
+                        marker=dict(size=4, color="#0096ff"),
+                        name="Efficiency (%)",
+                        hovertemplate="t = %{x:.1f} h<br>Efficiency = %{y:.2f} %<extra></extra>",
+                    ))
+                    # Trend line
+                    if len(eff_data) >= MIN_POINTS_FOR_REGRESSION:
+                        t_arr = eff_data["Time (hours)"].values.astype(float)
+                        e_arr = eff_data["Efficiency (%)"].values.astype(float)
+                        slope, intercept, *_ = stats.linregress(t_arr, e_arr)
+                        fig_eff.add_trace(go.Scatter(
+                            x=t_arr,
+                            y=slope * t_arr + intercept,
+                            mode="lines",
+                            line=dict(color="#ff4d6d", width=1.5, dash="dash"),
+                            name=f"Trend  ({-slope * 100:.2f} %/100h)",
+                            hovertemplate="Trend: %{y:.2f} %<extra></extra>",
+                        ))
+                    fig_eff.update_layout(
+                        paper_bgcolor="#0f1623", plot_bgcolor="#080c18",
+                        font=dict(color="#e2e8f0"),
+                        xaxis=dict(title="Time (hours)", gridcolor="#1e3a5f", zeroline=False),
+                        yaxis=dict(title="Faradaic Efficiency (%)", gridcolor="#1e3a5f",
+                                   range=[0, 105], zeroline=False),
+                        title="Faradaic Efficiency over Time",
+                        legend=dict(orientation="h", y=-0.18),
+                        height=380,
+                        margin=dict(l=60, r=20, t=50, b=70),
+                    )
+                    st.plotly_chart(fig_eff, use_container_width=True,
+                                    config={"toImageButtonOptions": {"format": "png", "filename": f"{detail_run}_efficiency"}})
+
+                # ── Secondary charts ──────────────────────────────────────────
+                # Groups: first available col in each tuple is the y-axis label.
+                _SEC_GROUPS: list[tuple[str, ...]] = [
+                    ("Average V (V)", "Avg. Voltage (V)", "Voltage (V)"),
+                    ("HFR",),
+                    ("Gas (LPM)",),
+                    ("Conductivity (µS/cm)",),
+                    ("STK temp An out", "STK temp Ca out"),
+                    ("Diff Pressure (mbar)",),
+                    ("Water flow (mL/s)",),
+                    ("Throughput (g/h)",),
+                ]
+
+                available_groups = [
+                    [c for c in grp if c in run_raw.columns and pd.to_numeric(run_raw[c], errors="coerce").notna().any()]
+                    for grp in _SEC_GROUPS
+                ]
+                available_groups = [g for g in available_groups if g]
+
+                if available_groups:
+                    st.markdown("##### Supporting measurements")
+                    n_cols = 2
+                    cols = st.columns(n_cols)
+                    for idx, group in enumerate(available_groups):
+                        fig_sec = go.Figure()
+                        _TRACE_COLORS = ["#00c896", "#f59e0b", "#a78bfa"]
+                        for ci, col in enumerate(group):
+                            sec_data = run_raw.dropna(subset=["Time (hours)"]).copy()
+                            sec_data[col] = pd.to_numeric(sec_data[col], errors="coerce")
+                            sec_data = sec_data.dropna(subset=[col])
+                            if sec_data.empty:
+                                continue
+                            fig_sec.add_trace(go.Scatter(
+                                x=sec_data["Time (hours)"],
+                                y=sec_data[col],
+                                mode="lines+markers",
+                                line=dict(color=_TRACE_COLORS[ci % len(_TRACE_COLORS)], width=1.5),
+                                marker=dict(size=3),
+                                name=col,
+                                hovertemplate=f"t = %{{x:.1f}} h<br>{col} = %{{y}}<extra></extra>",
+                            ))
+                        y_title = group[0]
+                        fig_sec.update_layout(
+                            paper_bgcolor="#0f1623", plot_bgcolor="#080c18",
+                            font=dict(color="#e2e8f0", size=10),
+                            xaxis=dict(title="Time (hours)", gridcolor="#1e3a5f", zeroline=False),
+                            yaxis=dict(title=y_title, gridcolor="#1e3a5f", zeroline=False),
+                            title=dict(text=y_title, font=dict(size=12)),
+                            showlegend=len(group) > 1,
+                            legend=dict(orientation="h", y=-0.25, font=dict(size=9)),
+                            height=260,
+                            margin=dict(l=55, r=15, t=40, b=55),
+                        )
+                        with cols[idx % n_cols]:
+                            st.plotly_chart(fig_sec, use_container_width=True,
+                                            config={"displayModeBar": False})
+
+                # ── Full data table ───────────────────────────────────────────
+                with st.expander("📋 Full measurement data", expanded=False):
+                    meas_cols = [c for c in run_raw.columns if not c.startswith("_")]
+                    st.dataframe(run_raw[meas_cols].reset_index(drop=True),
+                                 use_container_width=True, hide_index=True)
 
 
 if __name__ == "__main__":
