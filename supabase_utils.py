@@ -41,6 +41,7 @@ MEASUREMENT_COL_MAP: dict[str, str] = {
     "STK temp Ca out":                    "stk_temp_ca_out",
     "Throughput (g/h)":                   "throughput_g_h",
     "Avg. throughput (g/h)":              "avg_throughput_g_h",
+    "Comments":                           "comments",
 }
 
 # Reverse map for reading from the DB back into the DataFrame.
@@ -123,7 +124,7 @@ def _to_py(val):
 
 
 # SQL columns that hold text (all others are numeric)
-_TEXT_SQL_COLS = {"date_col", "time_of_day"}
+_TEXT_SQL_COLS = {"date_col", "time_of_day", "comments"}
 
 
 def _to_db_numeric(val):

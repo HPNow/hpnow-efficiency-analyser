@@ -57,6 +57,15 @@ def fetch_all_tabs() -> pd.DataFrame:
         raise RuntimeError("No measurements found in the Supabase database.")
     meas_df = pd.DataFrame(meas_data)
 
+    # ── Back-fill Comments from extra_data for rows migrated before the
+    #    comments column existed ──────────────────────────────────────────────
+    if "comments" in meas_df.columns and "extra_data" in meas_df.columns:
+        mask = meas_df["comments"].isna()
+        if mask.any():
+            meas_df.loc[mask, "comments"] = meas_df.loc[mask, "extra_data"].apply(
+                lambda ed: ed.get("Comments") if isinstance(ed, dict) else None
+            )
+
     # ── Join ──────────────────────────────────────────────────────────────────
     merged = meas_df.merge(runs_df, left_on="run_id", right_on="id", suffixes=("", "_run"))
 

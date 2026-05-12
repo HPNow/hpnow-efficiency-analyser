@@ -2023,6 +2023,32 @@ def main():
                     st.plotly_chart(fig_eff, use_container_width=True,
                                     config={"toImageButtonOptions": {"format": "png", "filename": f"{detail_run}_efficiency"}})
 
+                # ── Run log (operator comments) ───────────────────────────────
+                _comments_col = next(
+                    (c for c in ("Comments", "comments") if c in run_raw.columns), None
+                )
+                if _comments_col:
+                    _log = run_raw.dropna(subset=[_comments_col]).copy()
+                    _log = _log[_log[_comments_col].astype(str).str.strip() != ""]
+                    if not _log.empty:
+                        st.markdown("##### 📝 Run log")
+                        _log_display_cols = []
+                        if "Time (hours)" in _log.columns:
+                            _log_display_cols.append("Time (hours)")
+                        if "Efficiency (%)" in _log.columns:
+                            _log_display_cols.append("Efficiency (%)")
+                        _log_display_cols.append(_comments_col)
+                        st.dataframe(
+                            _log[_log_display_cols].reset_index(drop=True),
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Time (hours)": st.column_config.NumberColumn("Time (h)", format="%.1f"),
+                                "Efficiency (%)": st.column_config.NumberColumn("Efficiency (%)", format="%.1f"),
+                                _comments_col: st.column_config.TextColumn("Comment", width="large"),
+                            },
+                        )
+
                 # ── Secondary charts ──────────────────────────────────────────
                 # Groups: first available col in each tuple is the y-axis label.
                 _SEC_GROUPS: list[tuple[str, ...]] = [
