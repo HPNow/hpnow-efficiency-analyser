@@ -398,9 +398,15 @@ def _fix_time_hours(df):
     """
     MAX_PLAUSIBLE_HOURS = 12_000
 
-    # Normalise live-sheet "Time (h)" → canonical "Time (hours)"
-    if "Time (h)" in df.columns and "Time (hours)" not in df.columns:
-        df = df.rename(columns={"Time (h)": "Time (hours)"})
+    # Normalise live-sheet "Time (h)" → canonical "Time (hours)".
+    # When both exist (happens when an all-tab concat mixes live and historic
+    # sheets), coalesce rather than skip so live-sheet rows get their values.
+    if "Time (h)" in df.columns:
+        if "Time (hours)" not in df.columns:
+            df = df.rename(columns={"Time (h)": "Time (hours)"})
+        else:
+            df["Time (hours)"] = df["Time (hours)"].combine_first(df["Time (h)"])
+            df = df.drop(columns=["Time (h)"])
 
     if "Time (hours)" not in df.columns:
         return df
