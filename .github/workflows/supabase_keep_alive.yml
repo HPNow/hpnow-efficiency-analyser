@@ -1,0 +1,23 @@
+name: Keep Supabase alive
+
+on:
+  schedule:
+    - cron: "0 8 */3 * *"   # every 3 days at 08:00 UTC
+  workflow_dispatch:          # allow manual trigger from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
+            "https://ntaqqvilgjbhgzrkvzmy.supabase.co/rest/v1/runs?select=id&limit=1")
+          echo "HTTP status: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "Unexpected status code — check the secret is set correctly."
+            exit 1
+          fi
+          echo "Ping successful. Supabase inactivity timer reset."
