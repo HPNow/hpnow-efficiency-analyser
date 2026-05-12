@@ -29,13 +29,12 @@ def _fetch_live_sheet(live_sheet_id: str):
 
     import config
     import gspread
-    from google.oauth2.service_account import Credentials
     from fetch_sheets import _parse_tab, _coerce_numerics, _fix_time_hours
     from fetch_sheets import _trim_low_start_efficiency, _parse_datetime
     from fetch_sheets import _merge_duplicate_columns, _clean_data
 
-    SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-    creds  = Credentials.from_service_account_file(config.CREDENTIALS_FILE, scopes=SCOPES)
+    from fetch_sheets import _get_credentials
+    creds  = _get_credentials()
     client = gspread.authorize(creds)
     sheet  = client.open_by_key(live_sheet_id)
 
