@@ -1,0 +1,36 @@
+name: Weekly Supabase backup
+
+on:
+  schedule:
+    - cron: "0 2 * * 0"   # every Sunday at 02:00 UTC
+  workflow_dispatch:        # allow manual trigger from the Actions tab
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # needed to commit and push the CSV files
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install "supabase>=2.4.0,<2.10.0" pandas
+
+      - name: Export tables to CSV
+        env:
+          SUPABASE_URL: https://ntaqqvilgjbhgzrkvzmy.supabase.co
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python .github/scripts/backup_supabase.py
+
+      - name: Commit and push backups
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add backups/
+          git diff --staged --quiet && echo "No changes since last backup." || \
+            git commit -m "chore: weekly Supabase backup $(date -u +%Y-%m-%d)" && git push
