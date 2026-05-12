@@ -222,7 +222,7 @@ def _parse_tab(worksheet):
 
             meta = _extract_run_metadata(block)
             meta["tab_name"]  = tab_name
-            meta["station_id"] = meta.get("stack_id") or tab_name
+            meta["station_id"] = tab_name
             meta["informal"]  = False
 
             # Save inheritable params for any following informal runs
@@ -346,7 +346,7 @@ def _parse_tab_legacy(worksheet, raw):
             meta["operation_note"] = row[5].strip() if len(row) > 5 else None
 
     meta["tab_name"]   = tab_name
-    meta["station_id"] = meta.get("stack_id") or tab_name
+    meta["station_id"] = tab_name
     meta["informal"]   = False
 
     headers   = _dedup_headers(raw[HEADER_ROW])
