@@ -52,7 +52,7 @@ from scipy import stats
 logging.disable(logging.CRITICAL)
 warnings.filterwarnings("ignore")
 
-from fetch_sheets import fetch_all_tabs
+from fetch_db import fetch_all_tabs
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 # Default fallback chain — overridden by user selection in sidebar
@@ -190,7 +190,7 @@ st.set_page_config(
 #  DATA LOADING & COMPUTATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=3600, show_spinner="Loading data from Google Sheets…")
+@st.cache_data(ttl=3600, show_spinner="Loading data from database…")
 def load_data() -> pd.DataFrame:
     return fetch_all_tabs()
 
@@ -976,7 +976,7 @@ def main():
 
             st.divider()
 
-        if st.button("🔄 Refresh data from Sheets", use_container_width=True):
+        if st.button("🔄 Refresh data from database", use_container_width=True):
             st.cache_data.clear()
             st.session_state.last_loaded_at = datetime.now()
             st.rerun()
