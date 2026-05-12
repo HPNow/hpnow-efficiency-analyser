@@ -1847,25 +1847,31 @@ def main():
             if detail_run:
                 rrow    = station_runs[station_runs["run_id"] == detail_run].iloc[0]
                 run_raw = df[df["_run_id"] == detail_run].sort_values("Time (hours)")
+                raw_meta = run_raw.iloc[0]   # single row with all _meta_* fields
+
+                def _raw(col: str) -> str:
+                    return _fmt(raw_meta.get(f"_meta_{col}"))
+
+                run_uuid = raw_meta.get("_run_uuid", "")
 
                 # ── Metadata card ─────────────────────────────────────────────
                 with st.container(border=True):
                     m1, m2, m3, m4, m5 = st.columns(5)
-                    m1.metric("Stack ID",   _fmt(rrow.get("stack_id")))
-                    m2.metric("Operator",   _fmt(rrow.get("operator")))
-                    m3.metric("Date start", _fmt(rrow.get("date_start")))
+                    m1.metric("Stack ID",   _raw("stack_id"))
+                    m2.metric("Operator",   _raw("operator"))
+                    m3.metric("Date start", _raw("date_start"))
                     m4.metric("Duration",   f"{rrow['duration_h']:.0f} h" if not pd.isna(rrow["duration_h"]) else "—")
                     m5.metric("Status",     _fmt(rrow.get("label")))
 
                     m6, m7, m8, m9, m10 = st.columns(5)
-                    m6.metric("GDL",             _fmt(rrow.get("gdl")))
-                    m7.metric("Current (mA/cm²)", _fmt(rrow.get("current_mA_cm2")))
-                    m8.metric("Project",          _fmt(rrow.get("project")))
+                    m6.metric("GDL",              _raw("gdl"))
+                    m7.metric("Current (mA/cm²)", _raw("current_mA_cm2"))
+                    m8.metric("Project",           _raw("project"))
                     m9.metric("Start eff.",        f"{rrow['eff_start_%']:.1f}%" if not pd.isna(rrow["eff_start_%"]) else "—")
                     m10.metric("End eff.",          f"{rrow['eff_end_%']:.1f}%" if not pd.isna(rrow["eff_end_%"]) else "—")
 
                     deg = rrow.get("deg_rate_%/100h")
-                    aim = _fmt(rrow.get("aim"))
+                    aim = _raw("aim")
                     note_parts = []
                     if not pd.isna(deg):
                         note_parts.append(f"**Deg. rate:** {deg:.2f} %/100h")
@@ -1873,6 +1879,78 @@ def main():
                         note_parts.append(f"**Aim:** {aim}")
                     if note_parts:
                         st.caption("  ·  ".join(note_parts))
+
+                # ── Notes + Edit metadata (side by side) ──────────────────────
+                note_col, edit_col = st.columns([1, 1], gap="large")
+
+                with note_col:
+                    st.markdown("##### 📝 Notes")
+                    current_notes = _raw("notes")
+                    with st.form(key=f"notes_form_{detail_run}"):
+                        notes_input = st.text_area(
+                            "Engineer notes for this run",
+                            value=current_notes if current_notes != "—" else "",
+                            height=130,
+                            placeholder="e.g. GDL delaminated at hour 80, current step test, unusual condensation…",
+                            label_visibility="collapsed",
+                        )
+                        if st.form_submit_button("💾 Save notes", use_container_width=True):
+                            if run_uuid:
+                                try:
+                                    _get_sb_client().table("runs").update(
+                                        {"notes": notes_input or None}
+                                    ).eq("id", run_uuid).execute()
+                                    load_data.clear()
+                                    st.success("Notes saved.")
+                                    st.rerun()
+                                except Exception as _e:
+                                    st.error(f"Save failed: {_e}")
+                            else:
+                                st.error("Run UUID not found — try refreshing.")
+
+                with edit_col:
+                    with st.expander("✏️ Edit metadata", expanded=False):
+                        with st.form(key=f"edit_form_{detail_run}"):
+                            e1, e2 = st.columns(2)
+                            new_stack    = e1.text_input("Stack ID",    value=_raw("stack_id") if _raw("stack_id") != "—" else "")
+                            new_operator = e2.text_input("Operator",    value=_raw("operator") if _raw("operator") != "—" else "")
+                            new_gdl      = e1.text_input("GDL",         value=_raw("gdl") if _raw("gdl") != "—" else "")
+                            new_project  = e2.text_input("Project",     value=_raw("project") if _raw("project") != "—" else "")
+                            new_aim      = st.text_input("Aim",         value=_raw("aim") if _raw("aim") != "—" else "")
+                            new_op_note  = st.text_area("Operation note", value=_raw("operation_note") if _raw("operation_note") != "—" else "", height=80)
+
+                            n3, n4, n5 = st.columns(3)
+                            _nc_raw = raw_meta.get("_meta_n_cells")
+                            _ca_raw = raw_meta.get("_meta_cell_area_cm2")
+                            _cd_raw = raw_meta.get("_meta_current_mA_cm2")
+                            new_n_cells  = n3.number_input("N cells",       min_value=0, step=1,
+                                value=int(float(_nc_raw)) if _nc_raw and str(_nc_raw) not in ("—","nan","None") else 0)
+                            new_cell_area = n4.number_input("Cell area (cm²)", min_value=0.0, step=0.1, format="%.2f",
+                                value=float(_ca_raw) if _ca_raw and str(_ca_raw) not in ("—","nan","None") else 0.0)
+                            new_current  = n5.number_input("Current (mA/cm²)", min_value=0.0, step=1.0, format="%.1f",
+                                value=float(_cd_raw) if _cd_raw and str(_cd_raw) not in ("—","nan","None") else 0.0)
+
+                            if st.form_submit_button("💾 Save metadata", use_container_width=True, type="primary"):
+                                if run_uuid:
+                                    try:
+                                        _get_sb_client().table("runs").update({
+                                            "stack_id":       new_stack or None,
+                                            "operator":       new_operator or None,
+                                            "gdl":            new_gdl or None,
+                                            "project":        new_project or None,
+                                            "aim":            new_aim or None,
+                                            "operation_note": new_op_note or None,
+                                            "n_cells":        int(new_n_cells) if new_n_cells else None,
+                                            "cell_area_cm2":  float(new_cell_area) if new_cell_area else None,
+                                            "current_ma_cm2": float(new_current) if new_current else None,
+                                        }).eq("id", run_uuid).execute()
+                                        load_data.clear()
+                                        st.success("Metadata saved.")
+                                        st.rerun()
+                                    except Exception as _e:
+                                        st.error(f"Save failed: {_e}")
+                                else:
+                                    st.error("Run UUID not found — try refreshing.")
 
                 # ── Efficiency chart ──────────────────────────────────────────
                 eff_data = run_raw.dropna(subset=["Time (hours)", "Efficiency (%)"])

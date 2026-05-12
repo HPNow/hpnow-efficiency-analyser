@@ -83,6 +83,9 @@ def fetch_all_tabs() -> pd.DataFrame:
     # ── Sort by run then row order ────────────────────────────────────────────
     merged = merged.sort_values(["_run_id", "row_order"], ignore_index=True)
 
+    # ── Preserve run UUID for in-app edits ────────────────────────────────────
+    merged["_run_uuid"] = merged["run_id"]
+
     # ── Drop internal DB columns ──────────────────────────────────────────────
     drop = {"id", "id_run", "run_id", "source_key", "migrated_at", "row_order", "extra_data"}
     merged = merged.drop(columns=[c for c in drop if c in merged.columns])
