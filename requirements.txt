@@ -1,4 +1,5 @@
 gspread==6.1.2
+supabase>=2.4.0,<2.10.0
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 pandas==2.2.2
