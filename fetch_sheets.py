@@ -40,7 +40,7 @@ INHERITABLE_META = (
 
 # Row labels to skip when collecting data rows (summaries / sub-headers)
 SKIP_LABELS = frozenset({
-    "Time (hours)", "Last measured hour", "Last measured efficiency",
+    "Time (hours)", "Time (h)", "Last measured hour", "Last measured efficiency",
     "Latest comment", "Gap", "Date start", "Cell area",
     "Current ", "Current", "Project", "Cabinet",
 })
@@ -98,10 +98,11 @@ def _extract_run_metadata(block_rows):
         # The "Initials" / operator-ID row — both standard and legacy format
         if label == "Initials" or (len(row) > 3 and row[3].strip() == "Stack ID"):
             meta["operator"] = row[2].strip() if len(row) > 2 else None
-            # Stack ID label is at col3, value at col5
-            meta["stack_id"] = (
-                row[5].strip() if len(row) > 5 and row[5].strip() else None
-            )
+            # Stack ID label is at col3, value at col5; col4 is a fallback for
+            # sheets where the value landed one column earlier.
+            val5 = row[5].strip() if len(row) > 5 else ""
+            val4 = row[4].strip() if len(row) > 4 else ""
+            meta["stack_id"] = val5 or val4 or None
             continue  # already handled — don't fall through to label checks
         if not label:
             continue  # skip blank rows
@@ -229,11 +230,11 @@ def _parse_tab(worksheet):
                 if meta.get(key):
                     last_formal_meta[key] = meta[key]
 
-            # Find "Time (hours)" header from i+1 (may be inside the 12-row window)
+            # Find "Time (hours)" / "Time (h)" header from i+1
             k = i + 1
             while k < len(raw):
                 r0 = raw[k][0].strip() if raw[k] else ""
-                if r0 == "Time (hours)":
+                if r0 in ("Time (hours)", "Time (h)"):
                     break
                 if _is_formal_boundary(raw[k]) or INFORMAL_BOUNDARY.match(r0):
                     k = -1  # signal: no header before next boundary
@@ -271,7 +272,7 @@ def _parse_tab(worksheet):
             found_new_header = False
             while k < min(i + 4, len(raw)):
                 r0 = raw[k][0].strip() if raw[k] else ""
-                if r0 == "Time (hours)":
+                if r0 in ("Time (hours)", "Time (h)"):
                     last_headers = _dedup_headers(raw[k])
                     found_new_header = True
                     k += 1  # data starts after header
@@ -325,15 +326,24 @@ def _parse_tab_legacy(worksheet, raw):
         label = row[0].strip()
         if label == "Initials":
             meta["operator"] = row[2].strip() if len(row) > 2 else None
-            meta["stack_id"] = (
-                row[5].strip() if len(row) > 5 and row[5].strip() else None
-            )
+            val5 = row[5].strip() if len(row) > 5 else ""
+            val4 = row[4].strip() if len(row) > 4 else ""
+            meta["stack_id"] = val5 or val4 or None
         elif label == "Date start":
             meta["date_start"] = row[2].strip() if len(row) > 2 else None
+            meta["aim"]        = row[5].strip() if len(row) > 5 else None
+        elif label == "Cell area":
+            meta["cell_area_cm2"] = row[2].strip() if len(row) > 2 else None
+            meta["n_cells"]       = row[5].strip() if len(row) > 5 else None
+        elif label in ("Current ", "Current"):
+            meta["current_mA_cm2"] = row[2].strip() if len(row) > 2 else None
+            meta["gdl"]            = row[5].strip() if len(row) > 5 else None
         elif label == "Project":
-            meta["project"] = row[2].strip() if len(row) > 2 else None
+            meta["project"]   = row[2].strip() if len(row) > 2 else None
+            meta["foam_grid"] = row[5].strip() if len(row) > 5 else None
         elif label == "Cabinet":
-            meta["cabinet"] = row[2].strip() if len(row) > 2 else None
+            meta["cabinet"]        = row[2].strip() if len(row) > 2 else None
+            meta["operation_note"] = row[5].strip() if len(row) > 5 else None
 
     meta["tab_name"]   = tab_name
     meta["station_id"] = meta.get("stack_id") or tab_name
@@ -366,6 +376,10 @@ def _fix_time_hours(df):
     Any value above this is treated as suspicious (likely stored in seconds).
     """
     MAX_PLAUSIBLE_HOURS = 12_000
+
+    # Normalise live-sheet "Time (h)" → canonical "Time (hours)"
+    if "Time (h)" in df.columns and "Time (hours)" not in df.columns:
+        df = df.rename(columns={"Time (h)": "Time (hours)"})
 
     if "Time (hours)" not in df.columns:
         return df

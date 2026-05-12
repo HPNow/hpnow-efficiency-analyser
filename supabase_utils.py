@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 MEASUREMENT_COL_MAP: dict[str, str] = {
     "Time (hours)":                       "time_h",
+    "Time (h)":                           "time_h",         # live sheet variant
     "Time (seconds)":                     "time_s",
     "Date ":                              "date_col",   # trailing space variant
     "Date":                               "date_col",
@@ -21,16 +22,18 @@ MEASUREMENT_COL_MAP: dict[str, str] = {
     "Current (A)":                        "current_a",
     "Voltage (V)":                        "voltage_v",
     "Average V (V)":                      "avg_voltage_v",
-    "Current density (mA/cm²)":      "current_density_ma_cm2",
+    "Current density (mA/cm²)":           "current_density_ma_cm2",
+    "Current density (mA/cm2)":           "current_density_ma_cm2",  # ASCII variant
     "HFR":                                "hfr",
     "H2O2 current (A)":                   "h2o2_current_a",
-    "H2O2 current density (mA/cm²)": "h2o2_current_density_ma_cm2",
+    "H2O2 current density (mA/cm²)":      "h2o2_current_density_ma_cm2",
+    "H2O2 current density (mA/cm2)":      "h2o2_current_density_ma_cm2",  # ASCII variant
     "Strip 1":                            "strip_1",
     "Strip 2":                            "strip_2",
     "Peroxide in DI water":               "peroxide_in_di",
     "Gas (LPM)":                          "gas_lpm",
     "Water flow (mL/s)":                  "water_flow_ml_s",
-    "Conductivity (µS/cm)":          "conductivity_us_cm",
+    "Conductivity (µS/cm)":               "conductivity_us_cm",
     "Diff Pressure (mbar)":               "diff_pressure_mbar",
     "Anode flow (mL/s)":                  "anode_flow_ml_s",
     "STK temp An out":                    "stk_temp_an_out",
