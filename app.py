@@ -53,6 +53,7 @@ logging.disable(logging.CRITICAL)
 warnings.filterwarnings("ignore")
 
 from fetch_db import fetch_all_tabs
+from supabase_utils import get_client as _get_sb_client, insert_run as _insert_run, meta_to_runs_row as _meta_to_runs_row
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 # Default fallback chain — overridden by user selection in sidebar
@@ -193,6 +194,16 @@ st.set_page_config(
 @st.cache_data(ttl=3600, show_spinner="Loading data from database…")
 def load_data() -> pd.DataFrame:
     return fetch_all_tabs()
+
+
+@st.cache_data(ttl=300, show_spinner="Fetching live sheet…")
+def load_live_sheet() -> pd.DataFrame | None:
+    """Parse the live Google Sheet. Cached for 5 minutes."""
+    import config
+    from migrate_run import _fetch_live_sheet
+    if not getattr(config, "LIVE_SHEET_ID", ""):
+        return None
+    return _fetch_live_sheet(config.LIVE_SHEET_ID)
 
 
 @st.cache_data(ttl=3600, show_spinner="Computing run statistics…")
@@ -1068,12 +1079,13 @@ def main():
     # ── Tabs ──────────────────────────────────────────────────────────────────
     _n_runs     = len(filtered_stats)
     _n_stations = filtered_stats["station"].nunique()
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         f"📉 Degradation Overview  ({_n_runs} runs)",
         "📈 Efficiency Trajectories",
         "🔍 Correlations",
         f"🏭 Station Comparison  ({_n_stations} stations)",
         "💬 Ask AI",
+        "➕ Migrate Run",
     ])
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1586,6 +1598,107 @@ def main():
                     if st.button("🗑️ Clear chat history", type="secondary", use_container_width=True):
                         st.session_state.chat_history = []
                         st.rerun()
+
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  TAB 6 — MIGRATE RUN
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab6:
+        st.subheader("Migrate Completed Run")
+        st.caption(
+            "When an experiment finishes, select its station tab below. "
+            "Preview the data, then click **Migrate** to save it to the database. "
+            "Once you see the green confirmation you can safely clear that slot "
+            "in the live sheet and start a new experiment."
+        )
+
+        import config as _config
+        if not getattr(_config, "LIVE_SHEET_ID", ""):
+            st.warning("LIVE_SHEET_ID is not configured in config.py.")
+        else:
+            col_refresh, _ = st.columns([1, 4])
+            with col_refresh:
+                if st.button("🔄 Refresh live sheet", use_container_width=True):
+                    load_live_sheet.clear()
+                    st.rerun()
+
+            try:
+                live_df = load_live_sheet()
+            except Exception as _e:
+                st.error(f"Could not load live sheet: {_e}")
+                live_df = None
+
+            if live_df is not None and not live_df.empty:
+                available_tabs = sorted(live_df["_meta_tab_name"].dropna().unique().tolist())
+                selected_tab = st.selectbox(
+                    "Station tab",
+                    options=available_tabs,
+                    index=None,
+                    placeholder="Select a station…",
+                )
+
+                if selected_tab:
+                    tab_df   = live_df[live_df["_meta_tab_name"] == selected_tab]
+                    run_ids  = tab_df["_run_id"].unique()
+
+                    # Clear success flag if the user picks a different tab
+                    if st.session_state.get("_migrate_last_tab") != selected_tab:
+                        st.session_state.pop("_migrate_success", None)
+                    st.session_state["_migrate_last_tab"] = selected_tab
+
+                    for run_id in run_ids:
+                        run_df   = tab_df[tab_df["_run_id"] == run_id]
+                        runs_row = _meta_to_runs_row(run_df, selected_tab, run_id_hint=run_id)
+
+                        # Check if already in Supabase
+                        try:
+                            _sb  = _get_sb_client()
+                            _res = _sb.table("runs").select("id").eq("source_key", runs_row["source_key"]).execute()
+                            already_in_db = len(_res.data) > 0
+                        except Exception:
+                            already_in_db = False
+
+                        # ── Metadata preview card ─────────────────────────────
+                        with st.container(border=True):
+                            meta_col, count_col = st.columns([3, 1])
+                            with meta_col:
+                                st.markdown(
+                                    f"**Stack:** {runs_row.get('stack_id') or '—'} &nbsp;|&nbsp; "
+                                    f"**Operator:** {runs_row.get('operator') or '—'}"
+                                )
+                                st.markdown(
+                                    f"**Date start:** {runs_row.get('date_start') or '—'} &nbsp;|&nbsp; "
+                                    f"**Project:** {runs_row.get('project') or '—'}"
+                                )
+                                if runs_row.get("aim"):
+                                    st.markdown(f"**Aim:** {runs_row['aim']}")
+                                if runs_row.get("operation_note"):
+                                    st.markdown(f"**Note:** {runs_row['operation_note']}")
+                            with count_col:
+                                st.metric("Measurements", len(run_df))
+                                if already_in_db:
+                                    st.caption("🔄 Already in database")
+                                else:
+                                    st.caption("🆕 New run")
+
+                        # ── Migrate button / success state ────────────────────
+                        if st.session_state.get("_migrate_success"):
+                            st.success(
+                                "✅ Run migrated successfully. "
+                                "You can now clear this tab in the live sheet and start a new experiment."
+                            )
+                        else:
+                            btn_label = "🔄 Update in database" if already_in_db else "⬆️ Migrate to database"
+                            if st.button(btn_label, type="primary", use_container_width=True, key=f"migrate_{run_id}"):
+                                with st.spinner("Migrating…"):
+                                    try:
+                                        _sb = _get_sb_client()
+                                        _insert_run(_sb, run_df, selected_tab)
+                                        st.session_state["_migrate_success"] = True
+                                        load_data.clear()   # main data cache — pick up the new run
+                                        st.rerun()
+                                    except Exception as _e:
+                                        st.error(f"Migration failed: {_e}")
 
 
 if __name__ == "__main__":
