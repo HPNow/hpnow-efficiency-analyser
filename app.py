@@ -560,6 +560,7 @@ def fig_trajectories_plotly(
 
     fig = go.Figure()
     plotted = 0
+    ordered_run_ids: list[str] = []   # trace index → run_id mapping for click events
 
     for run_id in selected_run_ids:
         run_df = (
@@ -607,6 +608,7 @@ def fig_trajectories_plotly(
             hovertemplate=hover,
             showlegend=False,
         ))
+        ordered_run_ids.append(run_id)
         plotted += 1
 
     # Invisible colorbar trace for the degradation-rate legend
@@ -638,7 +640,7 @@ def fig_trajectories_plotly(
         height=460,
         margin=dict(l=60, r=20, t=50, b=50),
     )
-    return fig
+    return fig, ordered_run_ids
 
 
 def fig_run_level_corr(
@@ -1301,8 +1303,37 @@ def main():
             if traj.empty:
                 st.info("No runs match the trajectory filters.")
             else:
-                fig = fig_trajectories_plotly(filtered_df, filtered_stats, traj["run_id"].tolist(), color_by)
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "toImageButtonOptions": {"format": "png", "filename": "hpnow_trajectories"}})
+                fig, ordered_run_ids = fig_trajectories_plotly(filtered_df, filtered_stats, traj["run_id"].tolist(), color_by)
+                event = st.plotly_chart(
+                    fig,
+                    use_container_width=True,
+                    on_select="rerun",
+                    key="traj_chart",
+                    config={"displayModeBar": True, "toImageButtonOptions": {"format": "png", "filename": "hpnow_trajectories"}},
+                )
+
+                # ── Click-to-inspect: pre-populate Run Detail selectors ────────
+                pts = getattr(getattr(event, "selection", None), "points", [])
+                if pts:
+                    curve_idx = pts[0].get("curve_number", -1)
+                    if 0 <= curve_idx < len(ordered_run_ids):
+                        clicked_run = ordered_run_ids[curve_idx]
+                        clicked_station = filtered_stats.loc[
+                            filtered_stats["run_id"] == clicked_run, "station"
+                        ].values
+                        if len(clicked_station):
+                            st.session_state["detail_station"] = clicked_station[0]
+                            st.session_state["detail_run"]     = clicked_run
+                        r = filtered_stats[filtered_stats["run_id"] == clicked_run]
+                        if not r.empty:
+                            r = r.iloc[0]
+                            dr_str  = f"{r['deg_rate_%/100h']:.2f} %/100h" if not pd.isna(r["deg_rate_%/100h"]) else "—"
+                            dur_str = f"{r['duration_h']:.0f} h"           if not pd.isna(r["duration_h"])      else "—"
+                            st.info(
+                                f"📌 **{clicked_run}** · {r['date_start']} · "
+                                f"Deg. rate: {dr_str} · Duration: {dur_str}  \n"
+                                "Switch to the **🔬 Run Detail** tab to inspect, annotate, or edit this run."
+                            )
 
                 if color_by == "Classification label":
                     cols = st.columns(5)
