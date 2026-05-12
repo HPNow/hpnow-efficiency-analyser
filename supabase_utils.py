@@ -36,6 +36,7 @@ MEASUREMENT_COL_MAP: dict[str, str] = {
     "Conductivity (µS/cm)":               "conductivity_us_cm",
     "Diff Pressure (mbar)":               "diff_pressure_mbar",
     "Anode flow (mL/s)":                  "anode_flow_ml_s",
+    "Anode flow (ml/s)":                  "anode_flow_ml_s",  # lowercase variant
     "STK temp An out":                    "stk_temp_an_out",
     "STK temp Ca out":                    "stk_temp_ca_out",
     "Throughput (g/h)":                   "throughput_g_h",
@@ -128,19 +129,25 @@ _TEXT_SQL_COLS = {"date_col", "time_of_day"}
 def _to_db_numeric(val):
     """Return a float for numeric DB columns, or None if the value can't be parsed.
 
-    Some cells in the source sheet contain comma-separated strings like
-    "1.96, 1.91, 1.95" (multiple readings merged into one cell). PostgreSQL
-    rejects those for numeric columns, so we drop them rather than fail.
+    Multi-cell stacks log per-cell readings as comma-separated strings like
+    "1.96, 1.91, 1.95". We store the average so the value is still useful.
     """
     v = _to_py(val)
     if v is None:
         return None
     if isinstance(v, (int, float)):
         return v
+    s = str(v).strip()
     try:
-        return float(str(v).strip())
+        return float(s)
     except (ValueError, TypeError):
-        return None
+        # Comma-separated multi-cell readings — average them
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+        try:
+            nums = [float(p) for p in parts]
+            return sum(nums) / len(nums) if nums else None
+        except (ValueError, TypeError):
+            return None
 
 
 def make_source_key(
