@@ -66,6 +66,7 @@ RUNS_META_MAP: dict[str, str] = {
     "foam_grid":       "_meta_foam_grid",
     "operation_note":  "_meta_operation_note",
     "is_informal":     "_meta_informal",
+    "notes":           "_meta_notes",
 }
 
 
