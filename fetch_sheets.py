@@ -93,40 +93,55 @@ def _is_formal_boundary(row) -> bool:
 def _extract_run_metadata(block_rows):
     """
     Extract metadata from a run's header block (the ~7 orange rows).
-    block_rows: list of raw row lists starting from the 'Initials' row
-    (or the legacy operator-ID row in older tabs such as r0057).
+
+    Each row has a left half (col0=label, col2=value) and a right half
+    (col3=label, col5=value).  Historic and live sheets place some fields
+    (n_cells, aim) on different rows, so we parse both halves independently
+    for every row rather than relying on which row a label appears in.
     """
     meta = {}
     for row in block_rows:
         if not row:
             continue
-        label = row[0].strip()
-        # The "Initials" / operator-ID row — both standard and legacy format
-        if label == "Initials" or (len(row) > 3 and row[3].strip() == "Stack ID"):
-            meta["operator"] = row[2].strip() if len(row) > 2 else None
-            # Stack ID label is at col3, value at col5; col4 is a fallback for
-            # sheets where the value landed one column earlier.
-            val5 = row[5].strip() if len(row) > 5 else ""
-            val4 = row[4].strip() if len(row) > 4 else ""
-            meta["stack_id"] = val5 or val4 or None
-            continue  # already handled — don't fall through to label checks
-        if not label:
+
+        label_l = row[0].strip() if len(row) > 0 else ""
+        val_l   = row[2].strip() if len(row) > 2 else ""
+        label_r = row[3].strip() if len(row) > 3 else ""
+        val_r   = (row[5].strip() if len(row) > 5 else "") or (row[4].strip() if len(row) > 4 else "")
+
+        # Initials / operator-ID row — both standard and legacy format
+        if label_l == "Initials" or label_r == "Stack ID":
+            meta["operator"] = val_l or None
+            meta["stack_id"] = val_r or None
+            continue  # fully handled
+
+        if not label_l:
             continue  # skip blank rows
-        if label == "Date start":
-            meta["date_start"] = row[2].strip() if len(row) > 2 else None
-            meta["aim"]        = row[5].strip() if len(row) > 5 else None
-        elif label in ("Cell area",):
-            meta["cell_area_cm2"] = row[2].strip() if len(row) > 2 else None
-            meta["n_cells"]       = row[5].strip() if len(row) > 5 else None
-        elif label.strip() in ("Current ", "Current"):
-            meta["current_mA_cm2"] = row[2].strip() if len(row) > 2 else None
-            meta["gdl"]            = row[5].strip() if len(row) > 5 else None
-        elif label == "Project":
-            meta["project"]   = row[2].strip() if len(row) > 2 else None
-            meta["foam_grid"] = row[5].strip() if len(row) > 5 else None
-        elif label == "Cabinet":
-            meta["cabinet"]        = row[2].strip() if len(row) > 2 else None
-            meta["operation_note"] = row[5].strip() if len(row) > 5 else None
+
+        # ── Left-column labels ────────────────────────────────────────────
+        if label_l == "Date start":
+            meta["date_start"] = val_l or None
+        elif label_l == "Cell area":
+            meta["cell_area_cm2"] = val_l or None
+        elif label_l.rstrip() == "Current":
+            meta["current_mA_cm2"] = val_l or None
+        elif label_l == "Project":
+            meta["project"] = val_l or None
+        elif label_l == "Cabinet":
+            meta["cabinet"] = val_l or None
+
+        # ── Right-column labels (independent — may be on any row) ─────────
+        if label_r == "# of cells":
+            meta["n_cells"] = val_r or None
+        elif label_r == "Aim":
+            meta["aim"] = val_r or None
+        elif label_r == "GDL":
+            meta["gdl"] = val_r or None
+        elif label_r == "Foam/grid":
+            meta["foam_grid"] = val_r or None
+        elif label_r == "Operation":
+            meta["operation_note"] = val_r or None
+
     return meta
 
 
