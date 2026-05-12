@@ -31,7 +31,7 @@ def _fetch_live_sheet(live_sheet_id: str):
     import gspread
     from fetch_sheets import _parse_tab, _coerce_numerics, _fix_time_hours
     from fetch_sheets import _trim_low_start_efficiency, _parse_datetime
-    from fetch_sheets import _merge_duplicate_columns, _clean_data
+    from fetch_sheets import _derive_time_from_datetime, _merge_duplicate_columns, _clean_data
 
     from fetch_sheets import _get_credentials
     creds  = _get_credentials()
@@ -54,6 +54,7 @@ def _fetch_live_sheet(live_sheet_id: str):
     combined = _fix_time_hours(combined)
     combined = _trim_low_start_efficiency(combined)
     combined = _parse_datetime(combined)
+    combined = _derive_time_from_datetime(combined)
     combined = _merge_duplicate_columns(combined)
     combined = _clean_data(combined)
     return combined
