@@ -61,3 +61,22 @@ CREATE TABLE IF NOT EXISTS measurements (
 );
 
 CREATE INDEX IF NOT EXISTS idx_measurements_run_id ON measurements(run_id);
+
+-- Aggregated cabinet sensor statistics (one row per run).
+-- Stats are stored as JSONB so the channel set can evolve without schema changes.
+-- Each key in `stats` follows the pattern: cab_<channel>_<stat>
+-- where <stat> is one of: mean, std, p5, p95, slope
+-- Example: cab_cell_current_mean, cab_water_temp_slope
+CREATE TABLE IF NOT EXISTS cabinet_stats (
+    id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id          uuid        NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    cabinet_serial  text,                        -- Settings.Serial from the XLSM (e.g. 'r0054')
+    n_points        integer,                     -- number of 1-min sensor readings aggregated
+    window_start    timestamptz,                 -- earliest timestamp in the export
+    window_end      timestamptz,                 -- latest timestamp in the export
+    stats           jsonb,                       -- all aggregated channel stats
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cabinet_stats_run_id ON cabinet_stats(run_id);

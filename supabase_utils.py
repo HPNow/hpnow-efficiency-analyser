@@ -78,23 +78,26 @@ RUNS_META_MAP: dict[str, str] = {
 # ── Supabase client ───────────────────────────────────────────────────────────
 
 def get_client():
-    """Return a Supabase client, loading credentials from Streamlit secrets or env vars."""
+    """Return a Supabase client, loading credentials from env vars or Streamlit secrets.
+
+    Priority: SUPABASE_URL / SUPABASE_KEY env vars first (enables dev override),
+    then the [supabase] block in .streamlit/secrets.toml.
+    """
     import os
     from supabase import create_client
 
-    url = key = ""
-    try:
-        import streamlit as st
-        if hasattr(st, "secrets") and "supabase" in st.secrets:
-            url = st.secrets["supabase"]["url"]
-            key = st.secrets["supabase"]["service_key"]
-    except Exception:
-        pass
+    # Env vars take precedence — set them in start_dev.bat to point at the dev project
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_KEY", "")
 
-    if not url:
-        url = os.environ.get("SUPABASE_URL", "")
-    if not key:
-        key = os.environ.get("SUPABASE_KEY", "")
+    if not url or not key:
+        try:
+            import streamlit as st
+            if hasattr(st, "secrets") and "supabase" in st.secrets:
+                url = url or st.secrets["supabase"]["url"]
+                key = key or st.secrets["supabase"]["service_key"]
+        except Exception:
+            pass
 
     if not url or not key:
         raise RuntimeError(
@@ -286,3 +289,62 @@ def insert_run(client, df_group: pd.DataFrame, tab_name: str, *, dry_run: bool =
 
     logger.info(f"Upserted run {source_key}: {len(measurement_rows)} measurements")
     return run_uuid
+
+
+# ── Cabinet stats ─────────────────────────────────────────────────────────────
+
+def upsert_cabinet_stats(
+    client,
+    run_uuid: str,
+    cabinet_serial: str,
+    stats: dict,
+    window_start,
+    window_end,
+    n_points: int,
+) -> None:
+    """Upsert aggregated cabinet sensor stats for a run into `cabinet_stats`."""
+    def _fmt_ts(ts) -> str | None:
+        if ts is None:
+            return None
+        if hasattr(ts, "isoformat"):
+            return ts.isoformat()
+        return str(ts)
+
+    row = {
+        "run_id":          run_uuid,
+        "cabinet_serial":  cabinet_serial,
+        "n_points":        n_points,
+        "window_start":    _fmt_ts(window_start),
+        "window_end":      _fmt_ts(window_end),
+        "stats":           stats,
+    }
+    client.table("cabinet_stats").upsert(row, on_conflict="run_id").execute()
+    logger.info(f"Upserted cabinet stats for run {run_uuid}: "
+                f"{n_points} pts, {len(stats)} stat fields")
+
+
+def fetch_cabinet_stats(client, run_uuids: list[str] | None = None) -> "pd.DataFrame":
+    """
+    Fetch cabinet_stats rows and return a DataFrame with the stats JSONB
+    expanded into individual columns (one row per run_id).
+
+    Each column is named exactly as stored in stats, e.g. ``cab_cell_current_mean``.
+    """
+    import pandas as pd
+
+    query = client.table("cabinet_stats").select("run_id, stats")
+    if run_uuids:
+        query = query.in_("run_id", run_uuids)
+    result = query.execute()
+
+    if not result.data:
+        return pd.DataFrame()
+
+    rows = []
+    for r in result.data:
+        row = {"run_id": r["run_id"]}
+        if isinstance(r.get("stats"), dict):
+            row.update(r["stats"])
+        rows.append(row)
+
+    return pd.DataFrame(rows)

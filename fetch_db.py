@@ -13,6 +13,7 @@ from supabase_utils import (
     SQL_TO_DF_COL,
     RUNS_META_MAP,
     ALL_MEASUREMENT_SQL_COLS,
+    fetch_cabinet_stats,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,20 @@ def fetch_all_tabs() -> pd.DataFrame:
         )
     if "_datetime" in merged.columns:
         merged["_run_start_date"] = merged.groupby("_run_id")["_datetime"].transform("min")
+
+    # ── Join cabinet stats (one row per run, broadcast to all measurement rows) ─
+    # Stats columns are prefixed with cab_ and are ignored gracefully if the
+    # cabinet_stats table is empty or doesn't exist yet.
+    try:
+        run_uuids = merged["_run_uuid"].dropna().unique().tolist()
+        cab_df = fetch_cabinet_stats(client, run_uuids)
+        if not cab_df.empty:
+            merged = merged.merge(cab_df, left_on="_run_uuid", right_on="run_id", how="left")
+            merged = merged.drop(columns=["run_id"], errors="ignore")
+            n_stat_cols = len([c for c in merged.columns if c.startswith("cab_")])
+            logger.info(f"Joined cabinet stats: {len(cab_df)} runs, {n_stat_cols} stat columns")
+    except Exception as exc:
+        logger.debug(f"Cabinet stats unavailable (table may not exist yet): {exc}")
 
     logger.info(
         f"Loaded {len(merged)} rows across {merged['_run_id'].nunique()} runs "

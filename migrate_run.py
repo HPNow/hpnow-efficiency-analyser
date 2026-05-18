@@ -5,10 +5,19 @@ Run this when an experiment finishes and you are ready to free up its slot
 in the live sheet for a new experiment.
 
 Usage:
-    python migrate_run.py                    # migrate all new runs in the live sheet
-    python migrate_run.py --tab r0066        # migrate only a specific test station tab
-    python migrate_run.py --dry-run          # preview without writing
-    python migrate_run.py --tab r0066 --yes  # skip the confirmation prompt
+    python migrate_run.py                           # migrate all new runs
+    python migrate_run.py --tab r0066               # migrate only one tab
+    python migrate_run.py --dry-run                 # preview without writing
+    python migrate_run.py --tab r0066 --yes         # skip confirmation prompt
+
+    # Also ingest cabinet sensor stats from XLSM exports:
+    python migrate_run.py --cabinet-dir cabinet_exports/
+    python migrate_run.py --tab r0066 --cabinet-dir cabinet_exports/ --yes
+
+Cabinet XLSM files are matched to runs by the Serial field in their Settings
+sheet (e.g. Serial = r0066).  Place all XLSM exports in the cabinet directory
+before running.  If no matching file is found the run is still migrated; the
+cabinet stats can be added later with backfill_cabinet.py.
 
 After a successful migration the script prints the source_key of each inserted
 run so you can verify it appeared in Supabase before clearing the live sheet.
@@ -66,6 +75,63 @@ def _existing_source_keys(client) -> set[str]:
     return {row["source_key"] for row in result.data}
 
 
+def _ingest_cabinet_stats(sb_client, run_uuid: str, group, source_key: str, cabinet_dir: str) -> None:
+    """Find the matching cabinet XLSM and upsert aggregated stats for this run."""
+    import pandas as pd
+    from fetch_cabinet import find_cabinet_files, read_cabinet_xlsm, aggregate_run_stats
+    from supabase_utils import upsert_cabinet_stats
+
+    import numpy as np
+
+    def _get_meta(col: str):
+        full = f"_meta_{col}"
+        if full in group.columns:
+            v = group[full].iloc[0]
+            if v is None or (isinstance(v, float) and np.isnan(v)):
+                return None
+            return str(v).strip() or None
+        return None
+
+    serial = _get_meta("stack_id") or _get_meta("tab_name") or ""
+    if not serial:
+        logger.debug(f"No serial for {source_key}, skipping cabinet stats")
+        return
+
+    files = find_cabinet_files(cabinet_dir, serial)
+    if not files:
+        logger.debug(f"No cabinet file found for serial {serial!r}")
+        return
+
+    # Use the file with the most data points (last after sort by density)
+    xlsm_path = files[-1]
+    try:
+        cab_serial, start_dt, df_cab = read_cabinet_xlsm(xlsm_path)
+
+        # Use run date_start as window anchor if available, else file's StartTime
+        run_start_raw = _get_meta("date_start")
+        if run_start_raw:
+            run_start = pd.to_datetime(run_start_raw, dayfirst=True, errors="coerce")
+        else:
+            run_start = start_dt
+
+        stats = aggregate_run_stats(df_cab, start_dt=run_start)
+        if not stats:
+            logger.warning(f"No cabinet stats computed for {source_key}")
+            return
+
+        window_start = df_cab["Time"].min()
+        window_end   = df_cab["Time"].max()
+
+        upsert_cabinet_stats(
+            sb_client, run_uuid, cab_serial, stats,
+            window_start, window_end, len(df_cab),
+        )
+        print(f"  CAB  {source_key}: {len(df_cab)} sensor pts → {len(stats)} stats")
+
+    except Exception as exc:
+        logger.warning(f"Cabinet stats failed for {source_key}: {exc}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Migrate a completed run from the live Google Sheet into Supabase."
@@ -73,6 +139,13 @@ def main():
     parser.add_argument("--tab",     metavar="TAB_NAME", help="Only migrate runs from this sheet tab.")
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing.")
     parser.add_argument("--yes",     action="store_true", help="Skip confirmation prompt.")
+    parser.add_argument(
+        "--cabinet-dir",
+        metavar="DIR",
+        default=None,
+        help="Directory containing cabinet XLSM exports. If provided, per-run sensor "
+             "stats are aggregated and stored in Supabase alongside the run.",
+    )
     args = parser.parse_args()
 
     import config
@@ -140,13 +213,18 @@ def main():
     succeeded = failed = 0
     for group, tab_name, sk in new_groups:
         try:
-            insert_run(sb_client, group, tab_name, dry_run=args.dry_run)
+            run_uuid = insert_run(sb_client, group, tab_name, dry_run=args.dry_run)
             succeeded += 1
             if not args.dry_run:
                 print(f"  OK  {sk}")
         except Exception as exc:
             logger.error(f"  FAILED  {sk}: {exc}")
             failed += 1
+            continue
+
+        # ── Cabinet stats ──────────────────────────────────────────────────────
+        if args.cabinet_dir and not args.dry_run and run_uuid:
+            _ingest_cabinet_stats(sb_client, run_uuid, group, sk, args.cabinet_dir)
 
     verb = "would be migrated" if args.dry_run else "migrated"
     print(f"\n{succeeded} run(s) {verb}" + (f", {failed} failed." if failed else "."))
