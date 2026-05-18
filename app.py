@@ -246,6 +246,18 @@ def compute_run_stats(df: pd.DataFrame) -> pd.DataFrame:
         }
 
         # Duration from all time values (even rows with missing efficiency)
+        # Cabinet sensor stats — same value for every row in the run (broadcast join)
+        cab_data: dict = {}
+        for _c in grp_raw.columns:
+            if _c.startswith("cab_"):
+                _v = grp_raw[_c].iloc[0]
+                try:
+                    _f = float(_v)
+                    if np.isfinite(_f):
+                        cab_data[_c] = _f
+                except (TypeError, ValueError):
+                    pass
+
         t_all = pd.to_numeric(
             grp_raw["Time (hours)"] if "Time (hours)" in grp_raw.columns
             else pd.Series(dtype=float),
@@ -274,6 +286,7 @@ def compute_run_stats(df: pd.DataFrame) -> pd.DataFrame:
                 "r2":              np.nan,
                 "p_value":         np.nan,
                 "label":           "no_data",
+                **cab_data,
             })
             continue
 
@@ -315,6 +328,7 @@ def compute_run_stats(df: pd.DataFrame) -> pd.DataFrame:
             "r2":              round(r_value**2, 3) if not np.isnan(r_value) else np.nan,
             "p_value":         round(p_value, 4) if not np.isnan(p_value) else np.nan,
             "label":           label,
+            **cab_data,
         })
 
     return pd.DataFrame(records)
@@ -1001,6 +1015,17 @@ def main():
     </style>
     """, unsafe_allow_html=True)
 
+    # ── Dev-mode banner ───────────────────────────────────────────────────────
+    if os.environ.get("HPNOW_ENV") == "dev":
+        st.markdown(
+            "<div style='background:#2d1a00;border:1px solid #f59e0b;border-radius:4px;"
+            "padding:8px 14px;margin-bottom:8px;font-size:0.85rem;color:#fbbf24;'>"
+            "⚠️ <b>DEV MODE</b> — connected to the development Supabase project. "
+            "Data shown here is not production data."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
     st.title("⚡ HPNow — Faradaic Efficiency Degradation Analyser")
     st.caption("**Primary question:** what conditions cause Faradaic efficiency to decline over time?")
 
@@ -1389,6 +1414,80 @@ def main():
                 key="dl_feature_box",
             )
             plt.close(fig)
+
+        # ── Cabinet sensor correlations (only shown when data is available) ──
+        _cab_mean_cols = sorted([
+            c for c in filtered_stats.columns
+            if c.startswith("cab_") and c.endswith("_mean")
+        ])
+        if _cab_mean_cols:
+            st.markdown("---")
+            st.markdown(
+                "**Cabinet sensor correlations with degradation rate** (run-level Pearson r)  \n"
+                "Each bar = how strongly a sensor's run-average correlates with how fast "
+                "efficiency degraded.  🔴 Red = higher value → faster degradation · "
+                "🟢 Green = higher value → slower degradation"
+            )
+            _deg = pd.to_numeric(filtered_stats["deg_rate_%/100h"], errors="coerce")
+            _cab_corrs: list[tuple[str, float, int]] = []
+            for _col in _cab_mean_cols:
+                _x = pd.to_numeric(filtered_stats[_col], errors="coerce")
+                _valid = _deg.notna() & _x.notna()
+                _n = int(_valid.sum())
+                if _n < 5:
+                    continue
+                _r, _ = stats.pearsonr(_deg[_valid], _x[_valid])
+                # derive a readable label: strip cab_ prefix and _mean suffix
+                _label = _col[4:-5].replace("_", " ").title()
+                _cab_corrs.append((_label, _r, _n))
+            _cab_corrs.sort(key=lambda t: abs(t[1]), reverse=True)
+
+            if _cab_corrs:
+                _top = _cab_corrs[:25]
+                _fig_cab, _ax_cab = plt.subplots(
+                    figsize=(9, max(4, len(_top) * 0.52))
+                )
+                _bar_colors_cab = [
+                    COLORS["degrading"] if r > 0 else COLORS["stable"]
+                    for _, r, _ in _top
+                ]
+                _ax_cab.barh(
+                    [t[0] for t in reversed(_top)],
+                    [t[1] for t in reversed(_top)],
+                    color=list(reversed(_bar_colors_cab)),
+                    edgecolor="none", height=0.65,
+                )
+                for _bar, (_lbl, _r, _n) in zip(_ax_cab.patches, list(reversed(_top))):
+                    _x_pos = _bar.get_width()
+                    _ax_cab.text(
+                        _x_pos + (0.01 if _x_pos >= 0 else -0.01),
+                        _bar.get_y() + _bar.get_height() / 2,
+                        f"n={_n}",
+                        va="center", ha="left" if _x_pos >= 0 else "right",
+                        fontsize=8.5, color="#94a3b8",
+                    )
+                _ax_cab.axvline(0, color="#475569", linewidth=0.8)
+                _ax_cab.set_xlabel("Pearson r with Degradation Rate (%/100h)", fontsize=11)
+                _ax_cab.set_title(
+                    "Cabinet sensor channel means vs Degradation Rate\n"
+                    "Red = higher sensor average → faster degradation  ·  "
+                    "Green = higher → slower",
+                    fontsize=11,
+                )
+                _ax_cab.grid(axis="x", alpha=0.2)
+                _fig_cab.tight_layout()
+                st.pyplot(_fig_cab)
+                st.download_button(
+                    label="⬇️ Download chart (PNG)",
+                    data=fig_to_png_bytes(_fig_cab),
+                    file_name=f"hpnow_cabinet_corr_{datetime.now().strftime('%Y%m%d_%H%M')}.png",
+                    mime="image/png",
+                    use_container_width=True,
+                    key="dl_cab_corr",
+                )
+                plt.close(_fig_cab)
+            else:
+                st.info("Not enough runs with cabinet data to compute correlations (need ≥ 5).")
 
     # ══════════════════════════════════════════════════════════════════════════
     #  TAB 4 — STATION COMPARISON
@@ -2106,9 +2205,54 @@ def main():
                             st.plotly_chart(fig_sec, use_container_width=True,
                                             config={"displayModeBar": False})
 
+                # ── Cabinet sensor stats ──────────────────────────────────────
+                _cab_run_cols = [
+                    c for c in rrow.index
+                    if c.startswith("cab_") and pd.notna(rrow[c])
+                ]
+                if _cab_run_cols:
+                    with st.expander("🌡️ Cabinet sensor stats", expanded=False):
+                        st.caption(
+                            "Aggregated sensor readings from the cabinet logger during this run. "
+                            "Mean / Std / P5 / P95 are over all 1-min readings in the run window. "
+                            "Slope = units per hour (positive = rising over time)."
+                        )
+                        _cab_rows = []
+                        for _col in sorted(_cab_run_cols):
+                            _m = re.match(r"cab_(.+)_(mean|std|p5|p95|slope)$", _col)
+                            if _m:
+                                _cab_rows.append({
+                                    "channel": _m.group(1),
+                                    "stat":    _m.group(2),
+                                    "value":   rrow[_col],
+                                })
+                        if _cab_rows:
+                            _cab_piv = (
+                                pd.DataFrame(_cab_rows)
+                                .pivot(index="channel", columns="stat", values="value")
+                            )
+                            _stat_order = [
+                                s for s in ["mean", "std", "p5", "p95", "slope"]
+                                if s in _cab_piv.columns
+                            ]
+                            _cab_piv = _cab_piv[_stat_order].rename(columns={
+                                "mean": "Mean", "std": "Std",
+                                "p5": "P5%", "p95": "P95%", "slope": "Slope/h",
+                            })
+                            _cab_piv.index = [
+                                idx.replace("_", " ").title() for idx in _cab_piv.index
+                            ]
+                            st.dataframe(
+                                _cab_piv.round(4),
+                                use_container_width=True,
+                            )
+
                 # ── Full data table ───────────────────────────────────────────
                 with st.expander("📋 Full measurement data", expanded=False):
-                    meas_cols = [c for c in run_raw.columns if not c.startswith("_")]
+                    meas_cols = [
+                        c for c in run_raw.columns
+                        if not c.startswith("_") and not c.startswith("cab_")
+                    ]
                     st.dataframe(run_raw[meas_cols].reset_index(drop=True),
                                  use_container_width=True, hide_index=True)
 
