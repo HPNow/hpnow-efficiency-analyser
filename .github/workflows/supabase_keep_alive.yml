@@ -9,15 +9,19 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Supabase REST API
+      - name: Write keep-alive timestamp to Supabase
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
             -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
             -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
-            "https://ntaqqvilgjbhgzrkvzmy.supabase.co/rest/v1/runs?select=id&limit=1")
+            -H "Content-Type: application/json" \
+            -H "Prefer: resolution=merge-duplicates" \
+            -d '{"id":1,"pinged_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' \
+            "https://ntaqqvilgjbhgzrkvzmy.supabase.co/rest/v1/_keep_alive")
           echo "HTTP status: $STATUS"
-          if [ "$STATUS" != "200" ]; then
+          if [ "$STATUS" != "201" ] && [ "$STATUS" != "200" ]; then
             echo "Unexpected status code — check the secret is set correctly."
             exit 1
           fi
-          echo "Ping successful. Supabase inactivity timer reset."
+          echo "Keep-alive write successful. Supabase inactivity timer reset."

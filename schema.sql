@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS runs (
     gdl             text,
     foam_grid       text,
     operation_note  text,
+    notes           text,
     is_informal     boolean     NOT NULL DEFAULT false,
     migrated_at     timestamptz NOT NULL DEFAULT now()
 );
@@ -56,6 +57,8 @@ CREATE TABLE IF NOT EXISTS measurements (
     -- Throughput
     throughput_g_h              numeric,            -- "Throughput (g/h)"
     avg_throughput_g_h          numeric,            -- "Avg. throughput (g/h)"
+    -- Annotations
+    comments                    text,               -- "Comments"
     -- Overflow for any columns not in the fixed list above
     extra_data                  jsonb
 );
@@ -80,3 +83,10 @@ CREATE TABLE IF NOT EXISTS cabinet_stats (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cabinet_stats_run_id ON cabinet_stats(run_id);
+
+-- Single-row table touched by the keep-alive workflow to guarantee a DB write
+-- resets Supabase's inactivity timer (a read-only ping is not sufficient).
+CREATE TABLE IF NOT EXISTS _keep_alive (
+    id          integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    pinged_at   timestamptz NOT NULL DEFAULT now()
+);
