@@ -6,11 +6,14 @@ on:
   workflow_dispatch:          # allow manual trigger from the Actions tab
 
 jobs:
-  ping:
+  keep-alive:
     runs-on: ubuntu-latest
     steps:
-      - name: Write keep-alive timestamp to Supabase
+      # Step 1: write a timestamp — if the project is up, this resets the inactivity timer
+      - name: Write keep-alive timestamp
+        id: write
         run: |
+          STATUS="000"
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \
             -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
@@ -18,10 +21,30 @@ jobs:
             -H "Content-Type: application/json" \
             -H "Prefer: resolution=merge-duplicates" \
             -d '{"id":1,"pinged_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' \
-            "https://ntaqqvilgjbhgzrkvzmy.supabase.co/rest/v1/_keep_alive")
+            "https://ntaqqvilgjbhgzrkvzmy.supabase.co/rest/v1/_keep_alive" 2>/dev/null) || true
           echo "HTTP status: $STATUS"
-          if [ "$STATUS" != "201" ] && [ "$STATUS" != "200" ]; then
-            echo "Unexpected status code — check the secret is set correctly."
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+      # Step 2: if the write failed the project is paused — restore it automatically
+      - name: Restore project if paused
+        if: steps.write.outputs.status != '200' && steps.write.outputs.status != '201'
+        run: |
+          echo "Write returned HTTP ${{ steps.write.outputs.status }} — project appears paused. Triggering restore via Management API..."
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_PAT }}" \
+            "https://api.supabase.com/v1/projects/ntaqqvilgjbhgzrkvzmy/restore" 2>/dev/null) || true
+          echo "Restore API response: HTTP $HTTP"
+          if [ "$HTTP" != "200" ] && [ "$HTTP" != "201" ]; then
+            echo "::error::Restore request failed with HTTP $HTTP — manual intervention needed."
             exit 1
           fi
-          echo "Keep-alive write successful. Supabase inactivity timer reset."
+          echo "Restore initiated. Project will be back online within a few minutes."
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.write.outputs.status }}" = "200" ] || [ "${{ steps.write.outputs.status }}" = "201" ]; then
+            echo "Project is healthy. Keep-alive write succeeded."
+          else
+            echo "Project was paused and a restore has been triggered."
+          fi
