@@ -1,50 +1,76 @@
 name: Keep Supabase alive
 
+# Supabase pauses free-tier projects that go a week without "a few user requests
+# to the database each day". A single ping every 3 days is far below that bar, so
+# this runs twice daily and issues several queries per run. Twice daily also gives
+# redundancy: GitHub delays or drops scheduled runs when Actions is under load.
 on:
   schedule:
-    - cron: "0 8 */3 * *"   # every 3 days at 08:00 UTC
-  workflow_dispatch:          # allow manual trigger from the Actions tab
+    - cron: "17 7 * * *"    # 07:17 UTC daily
+    - cron: "43 19 * * *"   # 19:43 UTC daily
+  workflow_dispatch:         # allow manual trigger from the Actions tab
 
 jobs:
   keep-alive:
     runs-on: ubuntu-latest
+    env:
+      PROJECT_REF: ntaqqvilgjbhgzrkvzmy
+      SUPABASE_URL: https://ntaqqvilgjbhgzrkvzmy.supabase.co
     steps:
-      # Step 1: write a timestamp — if the project is up, this resets the inactivity timer
-      - name: Write keep-alive timestamp
-        id: write
+      # Issue a handful of real queries — reads against the tables the app
+      # actually uses, plus a keep-alive write. If the project is paused these
+      # all fail and `ok` stays false, which triggers the restore step below.
+      - name: Query Supabase
+        id: ping
         run: |
-          STATUS="000"
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST \
-            -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
+          ok=false
+
+          req() {
+            curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
+              -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
+              -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
+              "$@" 2>/dev/null || echo "000"
+          }
+
+          for path in "runs?select=id&limit=1" \
+                      "measurements?select=id&limit=1" \
+                      "cabinet_stats?select=run_id&limit=1"; do
+            code=$(req "$SUPABASE_URL/rest/v1/$path")
+            echo "GET /$path -> $code"
+            if [ "$code" = "200" ]; then ok=true; fi
+          done
+
+          code=$(req -X POST \
             -H "Content-Type: application/json" \
             -H "Prefer: resolution=merge-duplicates" \
             -d '{"id":1,"pinged_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' \
-            "https://ntaqqvilgjbhgzrkvzmy.supabase.co/rest/v1/_keep_alive" 2>/dev/null) || true
-          echo "HTTP status: $STATUS"
-          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+            "$SUPABASE_URL/rest/v1/_keep_alive")
+          echo "POST /_keep_alive -> $code"
+          if [ "$code" = "200" ] || [ "$code" = "201" ]; then ok=true; fi
 
-      # Step 2: if the write failed the project is paused — restore it automatically
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+
+      # Safety net: if every query failed the project is paused (or unreachable),
+      # so ask the Management API to restore it.
       - name: Restore project if paused
-        if: steps.write.outputs.status != '200' && steps.write.outputs.status != '201'
+        if: always() && steps.ping.outputs.ok != 'true'
         run: |
-          echo "Write returned HTTP ${{ steps.write.outputs.status }} — project appears paused. Triggering restore via Management API..."
-          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST \
+          echo "All queries failed — project appears paused. Requesting restore..."
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 -X POST \
             -H "Authorization: Bearer ${{ secrets.SUPABASE_PAT }}" \
-            "https://api.supabase.com/v1/projects/ntaqqvilgjbhgzrkvzmy/restore" 2>/dev/null) || true
-          echo "Restore API response: HTTP $HTTP"
-          if [ "$HTTP" != "200" ] && [ "$HTTP" != "201" ]; then
-            echo "::error::Restore request failed with HTTP $HTTP — manual intervention needed."
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/restore" 2>/dev/null || echo "000")
+          echo "Restore API -> $code"
+          if [ "$code" != "200" ] && [ "$code" != "201" ]; then
+            echo "::error::Restore failed (HTTP $code). Unpause manually at https://supabase.com/dashboard/project/$PROJECT_REF"
             exit 1
           fi
-          echo "Restore initiated. Project will be back online within a few minutes."
+          echo "Restore initiated — project should be back online in a few minutes."
 
       - name: Summary
+        if: always()
         run: |
-          if [ "${{ steps.write.outputs.status }}" = "200" ] || [ "${{ steps.write.outputs.status }}" = "201" ]; then
-            echo "Project is healthy. Keep-alive write succeeded."
+          if [ "${{ steps.ping.outputs.ok }}" = "true" ]; then
+            echo "Project healthy — queries succeeded."
           else
-            echo "Project was paused and a restore has been triggered."
+            echo "Project was paused; restore was triggered."
           fi
